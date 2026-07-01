@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { handleApiError, paginationFooter } from "../services/itglue-client.js";
+import { paginationFooter } from "../services/itglue-client.js";
+import { textResult, errorResult, jsonOrMarkdown } from "./_shared.js";
 import { ResponseFormat } from "../constants.js";
 import type { DocumentIndexer } from "../services/index/indexer.js";
 import type { DocumentSearcher } from "../services/index/search.js";
@@ -18,17 +19,6 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function textResult(text: string) {
-  return { content: [{ type: "text" as const, text }] };
-}
-
-function errorResult(error: unknown) {
-  return {
-    content: [{ type: "text" as const, text: handleApiError(error) }],
-    isError: true,
-  };
 }
 
 function formatBuildReport(report: BuildReport): string {
@@ -164,10 +154,11 @@ Notes:
           includeContent: params.include_content,
         });
 
-        if (params.response_format === ResponseFormat.JSON) {
-          return textResult(JSON.stringify(report, null, 2));
-        }
-        return textResult(formatBuildReport(report));
+        return jsonOrMarkdown(
+          params.response_format,
+          () => JSON.stringify(report, null, 2),
+          () => formatBuildReport(report)
+        );
       } catch (error) {
         return errorResult(error);
       }
@@ -289,16 +280,16 @@ Args:
           );
         }
 
-        if (params.response_format === ResponseFormat.JSON) {
-          return textResult(JSON.stringify(manifest, null, 2));
-        }
-        return textResult(
-          formatManifest(
-            manifest,
-            params.organization_id !== undefined
-              ? String(params.organization_id)
-              : undefined
-          )
+        return jsonOrMarkdown(
+          params.response_format,
+          () => JSON.stringify(manifest, null, 2),
+          () =>
+            formatManifest(
+              manifest,
+              params.organization_id !== undefined
+                ? String(params.organization_id)
+                : undefined
+            )
         );
       } catch (error) {
         return errorResult(error);
