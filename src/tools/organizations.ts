@@ -1,30 +1,53 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ITGlueClient } from "../services/itglue-client.js";
+import type { ITGlueOrganization } from "../types.js";
 import {
-  buildFilterParams,
-  buildPaginationParams,
-  handleApiError,
-  paginationFooter,
-  truncateIfNeeded,
-} from "../services/itglue-client.js";
-import { ResponseFormat } from "../constants.js";
-import type { ITGlueOrganization, PaginatedResult } from "../types.js";
+  registerResource,
+  type ResourceDescriptor,
+} from "./resource-factory.js";
 import {
   ListOrganizationsSchema,
   GetOrganizationSchema,
-  type ListOrganizationsInput,
-  type GetOrganizationInput,
 } from "../schemas/organizations.js";
 
-export function registerOrganizationTools(
-  server: McpServer,
-  client: ITGlueClient
-): void {
-  server.registerTool(
-    "itglue_list_organizations",
-    {
-      title: "List ITGlue Organizations",
-      description: `Search and list organizations in ITGlue. Use this to find organization IDs needed for document operations.
+function formatOrganizationRow(org: ITGlueOrganization): string {
+  const lines: string[] = [`## ${org.name} (ID: ${org.id})`];
+  if (org.description) lines.push(`${org.description}`);
+  if (org.organization_type_name)
+    lines.push(`- **Type**: ${org.organization_type_name}`);
+  if (org.organization_status_name)
+    lines.push(`- **Status**: ${org.organization_status_name}`);
+  if (org.short_name) lines.push(`- **Short Name**: ${org.short_name}`);
+  lines.push(`- **Updated**: ${org.updated_at}`);
+  lines.push("");
+  return lines.join("\n");
+}
+
+function formatOrganizationDetail(org: ITGlueOrganization): string {
+  const lines: string[] = [`# ${org.name}`, "", `**ID**: ${org.id}`];
+  if (org.description) lines.push(`**Description**: ${org.description}`);
+  if (org.short_name) lines.push(`**Short Name**: ${org.short_name}`);
+  if (org.organization_type_name)
+    lines.push(`**Type**: ${org.organization_type_name}`);
+  if (org.organization_status_name)
+    lines.push(`**Status**: ${org.organization_status_name}`);
+  if (org.primary) lines.push(`**Primary**: Yes`);
+  if (org.alert) lines.push(`\n> **Alert**: ${org.alert}`);
+  if (org.quick_notes) lines.push(`\n**Quick Notes**: ${org.quick_notes}`);
+  lines.push("");
+  lines.push(`- **Created**: ${org.created_at}`);
+  lines.push(`- **Updated**: ${org.updated_at}`);
+  return lines.join("\n");
+}
+
+const organizationsDescriptor: ResourceDescriptor<
+  ITGlueOrganization,
+  ITGlueOrganization
+> = {
+  list: {
+    toolName: "itglue_list_organizations",
+    title: "List ITGlue Organizations",
+    description: `Search and list organizations in ITGlue. Use this to find organization IDs needed for document operations.
 
 Supports filtering by name, ID, type, and status. Results are paginated.
 
@@ -50,119 +73,33 @@ Examples:
 Error Handling:
   - Returns "Error: Authentication failed..." if API key is invalid
   - Returns "Error: Rate limit exceeded..." if too many requests`,
-      inputSchema: ListOrganizationsSchema,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
+    schema: ListOrganizationsSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
     },
-    async (params: ListOrganizationsInput) => {
-      try {
-        // The ITGlue API's filter[name] is exact-match (not substring), so name
-        // is matched client-side below; the other filters are exact and stay on
-        // the wire.
-        const wireFilters = buildFilterParams({
-          id: params.filter_id,
-          organization_type_id: params.filter_organization_type_id,
-          organization_status_id: params.filter_organization_status_id,
-        });
-        const sortParams: Record<string, string | number> = params.sort
-          ? { sort: params.sort }
-          : {};
-
-        let result: PaginatedResult<ITGlueOrganization>;
-
-        if (params.filter_name) {
-          // SEARCH MODE: fetch all organizations and match by substring locally.
-          const allOrgs = await client.getAll<ITGlueOrganization>(
-            "/organizations",
-            { ...wireFilters, ...sortParams }
-          );
-
-          const needle = params.filter_name.toLowerCase();
-          const filtered = allOrgs.filter((org) =>
-            (org.name ?? "").toLowerCase().includes(needle)
-          );
-
-          const start = (params.page_number - 1) * params.page_size;
-          const pageData = filtered.slice(start, start + params.page_size);
-          const moreAvailable = start + params.page_size < filtered.length;
-
-          result = {
-            data: pageData,
-            total_count: filtered.length,
-            page_number: params.page_number,
-            page_size: params.page_size,
-            has_more: moreAvailable,
-            next_page: moreAvailable ? params.page_number + 1 : null,
-          };
-        } else {
-          result = await client.getMany<ITGlueOrganization>("/organizations", {
-            ...buildPaginationParams(params.page_number, params.page_size),
-            ...wireFilters,
-            ...sortParams,
-          });
-        }
-
-        if (result.data.length === 0) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "No organizations found matching the specified filters.",
-              },
-            ],
-          };
-        }
-
-        if (params.response_format === ResponseFormat.JSON) {
-          const text = JSON.stringify(result, null, 2);
-          return {
-            content: [{ type: "text" as const, text: truncateIfNeeded(text) }],
-          };
-        }
-
-        const lines: string[] = [
-          `# Organizations (${result.total_count} total)`,
-          "",
-        ];
-        for (const org of result.data) {
-          lines.push(`## ${org.name} (ID: ${org.id})`);
-          if (org.description) lines.push(`${org.description}`);
-          if (org.organization_type_name)
-            lines.push(`- **Type**: ${org.organization_type_name}`);
-          if (org.organization_status_name)
-            lines.push(`- **Status**: ${org.organization_status_name}`);
-          if (org.short_name) lines.push(`- **Short Name**: ${org.short_name}`);
-          lines.push(`- **Updated**: ${org.updated_at}`);
-          lines.push("");
-        }
-        lines.push(
-          paginationFooter(
-            result.total_count,
-            result.page_number,
-            result.has_more
-          )
-        );
-
-        const text = truncateIfNeeded(lines.join("\n"));
-        return { content: [{ type: "text" as const, text }] };
-      } catch (error) {
-        return {
-          content: [{ type: "text" as const, text: handleApiError(error) }],
-          isError: true,
-        };
-      }
-    }
-  );
-
-  server.registerTool(
-    "itglue_get_organization",
-    {
-      title: "Get ITGlue Organization",
-      description: `Get detailed information about a specific ITGlue organization by its ID.
+    headingNoun: "Organizations",
+    emptyMessage: "No organizations found matching the specified filters.",
+    filters: [
+      { param: "filter_id", wireKey: "id" },
+      { param: "filter_organization_type_id", wireKey: "organization_type_id" },
+      {
+        param: "filter_organization_status_id",
+        wireKey: "organization_status_id",
+      },
+      { param: "filter_name", wireKey: "name", clientSubstring: true },
+    ],
+    sortable: true,
+    variants: () => [{ path: "/organizations" }],
+    substring: { param: "filter_name", field: "name" },
+    formatItem: formatOrganizationRow,
+  },
+  get: {
+    toolName: "itglue_get_organization",
+    title: "Get ITGlue Organization",
+    description: `Get detailed information about a specific ITGlue organization by its ID.
 
 Returns the organization's name, description, type, status, short name, alerts, quick notes, and timestamps.
 
@@ -178,59 +115,24 @@ Examples:
 
 Error Handling:
   - Returns "Error: Resource not found..." if the organization ID doesn't exist`,
-      inputSchema: GetOrganizationSchema,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
+    schema: GetOrganizationSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
     },
-    async (params: GetOrganizationInput) => {
-      try {
-        const org = await client.getOne<ITGlueOrganization>(
-          `/organizations/${params.organization_id}`
-        );
+    fetch: (client, params) =>
+      client.getOne<ITGlueOrganization>(
+        `/organizations/${params.organization_id}`
+      ),
+    formatOne: formatOrganizationDetail,
+  },
+};
 
-        if (params.response_format === ResponseFormat.JSON) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify(org, null, 2),
-              },
-            ],
-          };
-        }
-
-        const lines: string[] = [
-          `# ${org.name}`,
-          "",
-          `**ID**: ${org.id}`,
-        ];
-        if (org.description) lines.push(`**Description**: ${org.description}`);
-        if (org.short_name) lines.push(`**Short Name**: ${org.short_name}`);
-        if (org.organization_type_name)
-          lines.push(`**Type**: ${org.organization_type_name}`);
-        if (org.organization_status_name)
-          lines.push(`**Status**: ${org.organization_status_name}`);
-        if (org.primary) lines.push(`**Primary**: Yes`);
-        if (org.alert) lines.push(`\n> **Alert**: ${org.alert}`);
-        if (org.quick_notes)
-          lines.push(`\n**Quick Notes**: ${org.quick_notes}`);
-        lines.push("");
-        lines.push(`- **Created**: ${org.created_at}`);
-        lines.push(`- **Updated**: ${org.updated_at}`);
-
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text" as const, text: handleApiError(error) }],
-          isError: true,
-        };
-      }
-    }
-  );
+export function registerOrganizationTools(
+  server: McpServer,
+  client: ITGlueClient
+): void {
+  registerResource(server, client, organizationsDescriptor);
 }
