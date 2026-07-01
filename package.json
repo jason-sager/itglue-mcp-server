@@ -1,7 +1,7 @@
 {
-  "name": "itglue-mcp-server",
-  "version": "1.0.3",
-  "description": "Unofficial MCP server for the ITGlue API — manage documents, sections, and organizations via the Model Context Protocol",
+  "name": "@jason-sager/itglue-mcp-server",
+  "version": "1.1.0",
+  "description": "Unofficial MCP server for the ITGlue API — documents, sections, organizations, plus client-side name search and a local content-search index. Fork of Junto-Platforms/itglue-mcp-server.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -39,15 +39,21 @@
   "engines": {
     "node": ">=18"
   },
-  "author": "Junto-Platforms",
+  "author": "Jason Sager",
+  "contributors": [
+    "Junto-Platforms (original project)"
+  ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Junto-Platforms/itglue-mcp-server"
+    "url": "https://github.com/jason-sager/itglue-mcp-server"
   },
-  "homepage": "https://github.com/Junto-Platforms/itglue-mcp-server#readme",
+  "homepage": "https://github.com/jason-sager/itglue-mcp-server#readme",
   "bugs": {
-    "url": "https://github.com/Junto-Platforms/itglue-mcp-server/issues"
+    "url": "https://github.com/jason-sager/itglue-mcp-server/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.1",

@@ -3,6 +3,8 @@
 An unofficial [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for the [ITGlue](https://www.itglue.com/) API. Enables AI assistants to manage ITGlue documents, document sections, and organizations.
 
 > **Note**: This is an unofficial, community-maintained project and is not affiliated with or endorsed by Kaseya/ITGlue.
+>
+> This package (`@jason-sager/itglue-mcp-server`) is a fork of [Junto-Platforms/itglue-mcp-server](https://github.com/Junto-Platforms/itglue-mcp-server) that adds working client-side name search and a local content-search index. See [Local Search Index](#local-search-index).
 
 ## Features
 
@@ -29,7 +31,7 @@ An unofficial [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) s
   "mcpServers": {
     "itglue": {
       "command": "npx",
-      "args": ["-y", "itglue-mcp-server"],
+      "args": ["-y", "@jason-sager/itglue-mcp-server"],
       "env": {
         "ITGLUE_API_KEY": "your-api-key-here"
       }
@@ -49,7 +51,7 @@ Config file locations:
 Start the server in HTTP mode:
 
 ```bash
-ITGLUE_API_KEY=your-key npx itglue-mcp-server --transport http --port 3000
+ITGLUE_API_KEY=your-key npx @jason-sager/itglue-mcp-server --transport http --port 3000
 ```
 
 Then configure your MCP client:
@@ -78,7 +80,7 @@ Add `--region eu` or `--region au` to the args:
   "mcpServers": {
     "itglue": {
       "command": "npx",
-      "args": ["-y", "itglue-mcp-server", "--region", "eu"],
+      "args": ["-y", "@jason-sager/itglue-mcp-server", "--region", "eu"],
       "env": {
         "ITGLUE_API_KEY": "your-api-key-here"
       }

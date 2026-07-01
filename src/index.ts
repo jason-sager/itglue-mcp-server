@@ -18,7 +18,7 @@ import { DocumentSearcher } from "./services/index/search.js";
 import { IndexStore } from "./services/index/store.js";
 import { buildIndexPaths, resolveCacheDir } from "./services/index/paths.js";
 
-const VERSION = "1.0.2";
+const VERSION = "1.1.0";
 const SERVER_NAME = "itglue-mcp-server";
 
 interface CliConfig {
