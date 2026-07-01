@@ -7,3 +7,6 @@ coverage/
 .claude/
 .opencode/
 CLAUDE.md
+
+# Local-only onboarding docs (shared out-of-band, not published to the repo)
+docs/
