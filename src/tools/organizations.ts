@@ -40,7 +40,7 @@ function formatOrganizationDetail(org: ITGlueOrganization): string {
   return lines.join("\n");
 }
 
-const organizationsDescriptor: ResourceDescriptor<
+export const organizationsDescriptor: ResourceDescriptor<
   ITGlueOrganization,
   ITGlueOrganization
 > = {

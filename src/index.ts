@@ -9,7 +9,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { BASE_URLS, DEFAULT_BASE_URL } from "./constants.js";
 import { ITGlueClient } from "./services/itglue-client.js";
-import { registerOrganizationTools } from "./tools/organizations.js";
+import { registerResourceTools } from "./tools/registry.js";
 import { registerDocumentTools } from "./tools/documents.js";
 import { registerDocumentSectionTools } from "./tools/document-sections.js";
 import { registerIndexTools } from "./tools/document-index.js";
@@ -240,7 +240,7 @@ function createServer(config: CliConfig): McpServer {
     },
   );
 
-  registerOrganizationTools(server, itglueClient);
+  registerResourceTools(server, itglueClient);
   registerDocumentTools(server, itglueClient);
   registerDocumentSectionTools(server, itglueClient);
   registerIndexTools(server, indexer, searcher, indexStore);
