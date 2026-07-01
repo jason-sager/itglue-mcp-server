@@ -6,11 +6,12 @@ An unofficial [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) s
 
 ## Features
 
-- **13 tools** covering documents, document sections, and organizations
+- **16 tools** covering documents, document sections, organizations, and a local search index
 - Full CRUD support for documents and document sections
 - Publish documents directly from your AI assistant
 - Organization lookup for finding org IDs
 - Pagination, filtering, and sorting support
+- **Local search index** for fast keyword search across all document titles and, per-organization, body content — stored compressed on disk
 - Markdown and JSON response formats
 - Regional API support (US, EU, Australia)
 - Stdio and streaming HTTP transports
@@ -137,9 +138,39 @@ Add `--region eu` or `--region au` to the args:
 | `itglue_update_document_section` | Update section content, type, or position |
 | `itglue_delete_document_section` | Permanently delete a section |
 
+### Search Index
+
+| Tool | Description |
+|------|-------------|
+| `itglue_index_documents` | Build/update the local search index (titles for all orgs; content per org) |
+| `itglue_search_documents` | Fast keyword search over the index (no live API calls) |
+| `itglue_index_status` | Report what is cached, sizes, and staleness |
+
 ## Search & Filtering
 
 `filter_name` on `itglue_list_documents` and `itglue_list_organizations` performs a **case-insensitive substring match**. The ITGlue API cannot filter documents by name (and its organization name filter is exact-match only), so name filtering is applied **client-side**: the tool retrieves the full list for the scope and matches locally, then paginates. ID, type, and status filters are exact and applied server-side. When you already know the exact ID, prefer `filter_id` to avoid fetching the whole list.
+
+## Local Search Index
+
+The ITGlue API has **no full-text search** and cannot filter documents by name, which makes "find the document about X" hard across a large instance. This server adds a local, on-disk index you build explicitly and then search instantly (search never calls the API).
+
+**Two tiers:**
+
+- **Titles** — cheap, covers **all** organizations. Build with `itglue_index_documents` (no `organization_id`).
+- **Content** — opt-in and **per organization** (costs roughly one API call per document). Build with `itglue_index_documents` using `organization_id` + `include_content: true`.
+
+**Build vs. update:**
+
+- `mode: "full"` rebuilds the scope from scratch.
+- `mode: "incremental"` (default) re-sweeps titles cheaply, then re-fetches content only for added/changed documents and drops deleted ones — so routine refreshes are fast.
+
+**Searching:** `itglue_search_documents` ranks by keyword overlap (title matches weighted above content matches). Pass `search_content: true` to also match indexed body text. Use `itglue_index_status` to see coverage and staleness.
+
+**Storage & privacy:** the cache is gzipped JSON. Document content is stored **only as a sorted, deduplicated set of keyword terms** — word order and repetition are discarded, so the cache is compact and the original text **cannot be reconstructed** from it. Typical footprint: a few MB for ~100k titles; roughly a few hundred KB per 1,000-document content shard.
+
+**Cache location:** defaults to a per-OS cache directory (`%LOCALAPPDATA%\itglue-mcp-server\cache` on Windows, `~/Library/Caches/itglue-mcp-server` on macOS, `$XDG_CACHE_HOME/itglue-mcp-server` on Linux). Override with `--cache-dir <path>` or the `ITGLUE_CACHE_DIR` environment variable. The cache is namespaced by API host, so US/EU/AU instances don't collide.
+
+> This search-index feature is a fork addition and is not part of the upstream project.
 
 ## API Key Setup
 

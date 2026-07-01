@@ -14,6 +14,11 @@ import { CHARACTER_LIMIT, MAX_PAGE_SIZE } from "../constants.js";
 // per-organization document library.
 export const GET_ALL_MAX_PAGES = 50;
 
+// 429-retry tuning (only active when the client is constructed with
+// retryOn429: true — see ITGlueClientConfig).
+const RETRY_MAX_ATTEMPTS = 3;
+const RETRY_BASE_MS = 1000;
+
 // ─── JSON:API Helpers ─────────────────────────────────────────────
 
 function kebabToSnake(key: string): string {
@@ -227,10 +232,19 @@ export function paginationFooter(
 
 // ─── ITGlue API Client ───────────────────────────────────────────
 
+/** getMany plus the JSON:API `included` sideload (deserialized). */
+export interface GetManyRawResult<T extends Record<string, unknown>>
+  extends PaginatedResult<T> {
+  included: Record<string, unknown>[];
+}
+
 export class ITGlueClient {
   private readonly http: AxiosInstance;
+  private readonly retryOn429: boolean;
+  private _requestCount = 0;
 
   constructor(config: ITGlueClientConfig) {
+    this.retryOn429 = config.retryOn429 ?? false;
     this.http = axios.create({
       baseURL: config.baseUrl,
       timeout: 30_000,
@@ -242,11 +256,55 @@ export class ITGlueClient {
     });
   }
 
+  /**
+   * Run a request, optionally retrying on HTTP 429. When retryOn429 is false
+   * (the default) this awaits `fn` once, so behavior is unchanged for CRUD
+   * tools. When enabled it honors a numeric Retry-After header, otherwise backs
+   * off exponentially, up to RETRY_MAX_ATTEMPTS.
+   */
+  /** Total HTTP requests issued (including retries). Used for build reports. */
+  get requestCount(): number {
+    return this._requestCount;
+  }
+
+  private async withRetry<R>(fn: () => Promise<R>): Promise<R> {
+    let attempt = 0;
+    for (;;) {
+      this._requestCount++;
+      try {
+        return await fn();
+      } catch (error) {
+        attempt++;
+        const status =
+          error instanceof AxiosError ? error.response?.status : undefined;
+        if (
+          !this.retryOn429 ||
+          status !== 429 ||
+          attempt >= RETRY_MAX_ATTEMPTS
+        ) {
+          throw error;
+        }
+        const header =
+          error instanceof AxiosError
+            ? error.response?.headers?.["retry-after"]
+            : undefined;
+        const retryAfter = Number(header);
+        const delayMs =
+          Number.isFinite(retryAfter) && retryAfter > 0
+            ? retryAfter * 1000
+            : RETRY_BASE_MS * 2 ** (attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
   async getOne<T extends Record<string, unknown>>(
     path: string,
     params?: Record<string, string | number>
   ): Promise<T> {
-    const response = await this.http.get<JsonApiResponse>(path, { params });
+    const response = await this.withRetry(() =>
+      this.http.get<JsonApiResponse>(path, { params })
+    );
     const data = response.data.data;
     if (Array.isArray(data)) {
       throw new Error("Expected single resource but received array");
@@ -254,11 +312,17 @@ export class ITGlueClient {
     return deserializeResource<T>(data);
   }
 
-  async getMany<T extends Record<string, unknown>>(
+  /**
+   * Like getMany, but also returns the JSON:API `included` sideload array
+   * (deserialized). Used to consume `include=sections` when the API supports it.
+   */
+  async getManyRaw<T extends Record<string, unknown>>(
     path: string,
     params?: Record<string, string | number>
-  ): Promise<PaginatedResult<T>> {
-    const response = await this.http.get<JsonApiResponse>(path, { params });
+  ): Promise<GetManyRawResult<T>> {
+    const response = await this.withRetry(() =>
+      this.http.get<JsonApiResponse>(path, { params })
+    );
     const data = response.data.data;
     const items = Array.isArray(data) ? data : [data];
 
@@ -270,6 +334,10 @@ export class ITGlueClient {
       ? Number(params["page[size]"])
       : items.length;
 
+    const included = (response.data.included ?? []).map((resource) =>
+      deserializeResource(resource)
+    );
+
     return {
       data: items.map((item) => deserializeResource<T>(item)),
       total_count: totalCount,
@@ -277,7 +345,19 @@ export class ITGlueClient {
       page_size: pageSize,
       has_more: nextPage !== null,
       next_page: nextPage,
+      included,
     };
+  }
+
+  async getMany<T extends Record<string, unknown>>(
+    path: string,
+    params?: Record<string, string | number>
+  ): Promise<PaginatedResult<T>> {
+    const { included: _included, ...result } = await this.getManyRaw<T>(
+      path,
+      params
+    );
+    return result;
   }
 
   /**

@@ -17,6 +17,8 @@ import { CHARACTER_LIMIT, MAX_PAGE_SIZE } from "../constants.js";
 import {
   makeResource,
   makeOrganizationResource,
+  makeDocumentResource,
+  makeSectionResource,
   makeResponse,
 } from "../test-helpers.js";
 
@@ -542,6 +544,94 @@ describe("ITGlueClient", () => {
       const result = await client.getAll("/organizations");
       expect(getMockHttp().get).toHaveBeenCalledTimes(GET_ALL_MAX_PAGES);
       expect(result).toHaveLength(GET_ALL_MAX_PAGES);
+    });
+  });
+
+  describe("getManyRaw", () => {
+    it("deserializes the included sideload array", async () => {
+      const doc = makeDocumentResource({ name: "Doc" });
+      const section = makeSectionResource({ content: "<p>Body</p>" });
+      getMockHttp().get.mockResolvedValue(
+        makeResponse([doc], { "total-count": 1, "next-page": null }, [section])
+      );
+
+      const result = await client.getManyRaw("/documents");
+      expect(result.data).toHaveLength(1);
+      expect(result.included).toHaveLength(1);
+      expect(result.included[0]).toHaveProperty("content", "<p>Body</p>");
+    });
+
+    it("returns an empty included array when absent", async () => {
+      getMockHttp().get.mockResolvedValue(
+        makeResponse([makeDocumentResource()], { "next-page": null })
+      );
+      const result = await client.getManyRaw("/documents");
+      expect(result.included).toEqual([]);
+    });
+  });
+
+  describe("429 retry", () => {
+    function rateLimitError(): AxiosError {
+      return new AxiosError("Too Many Requests", "429", undefined, undefined, {
+        status: 429,
+        data: {},
+        headers: {},
+        statusText: "Too Many Requests",
+        config: {},
+      } as never);
+    }
+
+    it("does not retry by default", async () => {
+      getMockHttp().get.mockRejectedValue(rateLimitError());
+      await expect(client.getMany("/organizations")).rejects.toBeInstanceOf(
+        AxiosError
+      );
+      expect(getMockHttp().get).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries on 429 when enabled, then succeeds", async () => {
+      vi.useFakeTimers();
+      try {
+        const retryClient = new ITGlueClient({
+          apiKey: "k",
+          baseUrl: "https://api.itglue.com",
+          retryOn429: true,
+        });
+        getMockHttp()
+          .get.mockRejectedValueOnce(rateLimitError())
+          .mockResolvedValueOnce(
+            makeResponse([makeOrganizationResource()], { "next-page": null })
+          );
+
+        const promise = retryClient.getMany("/organizations");
+        await vi.advanceTimersByTimeAsync(5000);
+        const result = await promise;
+
+        expect(result.data).toHaveLength(1);
+        expect(getMockHttp().get).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("gives up after the max attempts", async () => {
+      vi.useFakeTimers();
+      try {
+        const retryClient = new ITGlueClient({
+          apiKey: "k",
+          baseUrl: "https://api.itglue.com",
+          retryOn429: true,
+        });
+        getMockHttp().get.mockRejectedValue(rateLimitError());
+
+        const promise = retryClient.getMany("/organizations");
+        const assertion = expect(promise).rejects.toBeInstanceOf(AxiosError);
+        await vi.advanceTimersByTimeAsync(20000);
+        await assertion;
+        expect(getMockHttp().get).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

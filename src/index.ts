@@ -12,6 +12,11 @@ import { ITGlueClient } from "./services/itglue-client.js";
 import { registerOrganizationTools } from "./tools/organizations.js";
 import { registerDocumentTools } from "./tools/documents.js";
 import { registerDocumentSectionTools } from "./tools/document-sections.js";
+import { registerIndexTools } from "./tools/document-index.js";
+import { DocumentIndexer } from "./services/index/indexer.js";
+import { DocumentSearcher } from "./services/index/search.js";
+import { IndexStore } from "./services/index/store.js";
+import { buildIndexPaths, resolveCacheDir } from "./services/index/paths.js";
 
 const VERSION = "1.0.2";
 const SERVER_NAME = "itglue-mcp-server";
@@ -21,6 +26,7 @@ interface CliConfig {
   baseUrl: string;
   transport: "stdio" | "http";
   port: number;
+  cacheDir: string;
 }
 
 function printUsage(): void {
@@ -36,12 +42,14 @@ Options:
   --region <region>       Shortcut for base URL: us, eu, or au (default: us)
   --transport <mode>      Transport mode: stdio or http (default: stdio)
   --port <port>           HTTP server port (default: 3000, or set PORT env var)
+  --cache-dir <path>      Directory for the local search index cache
   --help                  Show this help message
   --version               Show version
 
 Environment Variables:
   ITGLUE_API_KEY      API key for authentication (required)
   ITGLUE_BASE_URL     Base URL override (optional)
+  ITGLUE_CACHE_DIR    Search index cache directory (optional; per-OS default)
   TRANSPORT           Transport mode: stdio or http (default: stdio)
   PORT                HTTP server port (default: 3000)
 
@@ -155,11 +163,14 @@ function parseArgs(): CliConfig {
     process.exit(1);
   }
 
+  const cacheDir = resolveCacheDir(getArgValue(args, "--cache-dir"));
+
   return {
     apiKey,
     baseUrl: baseUrl ?? DEFAULT_BASE_URL,
     transport: transport as "stdio" | "http",
     port,
+    cacheDir,
   };
 }
 
@@ -168,6 +179,21 @@ function createServer(config: CliConfig): McpServer {
     apiKey: config.apiKey,
     baseUrl: config.baseUrl,
   });
+
+  // A dedicated client for index builds retries on rate limits, so long
+  // sweeps ride through 429s while CRUD tools keep failing fast.
+  const indexClient = new ITGlueClient({
+    apiKey: config.apiKey,
+    baseUrl: config.baseUrl,
+    retryOn429: true,
+  });
+  const indexStore = new IndexStore(
+    buildIndexPaths(config.cacheDir, config.baseUrl)
+  );
+  const indexer = new DocumentIndexer(indexClient, indexStore, {
+    baseUrl: config.baseUrl,
+  });
+  const searcher = new DocumentSearcher(indexStore);
 
   const server = new McpServer(
     {
@@ -182,6 +208,12 @@ function createServer(config: CliConfig): McpServer {
         "- filter_name (on itglue_list_documents and itglue_list_organizations) performs a case-insensitive SUBSTRING match, applied client-side after retrieving the full list. It is safe for partial/approximate name lookups.",
         "- ID, type, and status filters are exact-match and applied server-side.",
         "- Because a name-filtered query fetches the entire list before matching, prefer an ID filter when you already know the exact ID.",
+        "",
+        "## Fast Search via the Local Index",
+        "- itglue_search_documents does keyword search over a locally cached index and does NOT call the ITGlue API. Build the index first with itglue_index_documents.",
+        "- itglue_index_documents (mode 'full') with no organization_id sweeps document TITLES across all organizations (cheap). Pass organization_id + include_content: true to also index that org's body CONTENT (one org per call).",
+        "- Use mode 'incremental' to refresh cheaply (only changed documents are re-fetched). Use itglue_index_status to see what is cached and whether it is stale.",
+        "- To find a document by topic: prefer itglue_search_documents once indexed; use itglue_list_documents (with filter_name) for a live, un-indexed lookup within one organization.",
         "",
         "## Workflow: Reading Documents",
         "1. Use itglue_list_organizations to find the organization ID.",
@@ -211,6 +243,7 @@ function createServer(config: CliConfig): McpServer {
   registerOrganizationTools(server, itglueClient);
   registerDocumentTools(server, itglueClient);
   registerDocumentSectionTools(server, itglueClient);
+  registerIndexTools(server, indexer, searcher, indexStore);
 
   return server;
 }

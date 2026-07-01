@@ -14,6 +14,21 @@ export const CHARACTER_LIMIT = 25_000;
 export const SECTION_TYPES = ["Text", "Heading", "Gallery", "Step"] as const;
 export type SectionType = (typeof SECTION_TYPES)[number];
 
+// ─── Document Search Index (fork-only content cache) ─────────────
+export const INDEX_SCHEMA_VERSION = 1;
+export const INDEX_DIR_NAME = "itglue-mcp-server";
+/** Max concurrent per-document section fetches during a content build. */
+export const INDEX_CONCURRENCY = 5;
+/** Tokens shorter/longer than these bounds are dropped during normalization. */
+export const INDEX_MIN_TERM_LEN = 2;
+export const INDEX_MAX_TERM_LEN = 40;
+/** Default number of search results returned. */
+export const SEARCH_DEFAULT_LIMIT = 20;
+/** gzip compression level for on-disk cache files (0-9). */
+export const GZIP_LEVEL = 6;
+/** Re-probe API capabilities if the cached probe is older than this. */
+export const CAPABILITY_TTL_DAYS = 30;
+
 export enum ResponseFormat {
   MARKDOWN = "markdown",
   JSON = "json",

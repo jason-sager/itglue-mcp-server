@@ -112,4 +112,10 @@ export interface PaginatedResult<T> {
 export interface ITGlueClientConfig {
   apiKey: string;
   baseUrl: string;
+  /**
+   * Retry requests that hit the API's 429 rate limit (honoring Retry-After,
+   * else exponential backoff). Off by default so CRUD tools fail fast; the
+   * index builder enables it for long-running sweeps.
+   */
+  retryOn429?: boolean;
 }

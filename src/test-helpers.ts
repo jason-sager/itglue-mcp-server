@@ -73,12 +73,14 @@ export function makeSectionResource(
 
 export function makeResponse(
   data: JsonApiResourceObject | JsonApiResourceObject[],
-  meta?: Record<string, unknown>
+  meta?: Record<string, unknown>,
+  included?: JsonApiResourceObject[]
 ) {
   return {
     data: {
       data,
       meta,
+      ...(included ? { included } : {}),
     },
   };
 }
@@ -87,6 +89,7 @@ export function makeMockClient() {
   return {
     getOne: vi.fn(),
     getMany: vi.fn(),
+    getManyRaw: vi.fn(),
     getAll: vi.fn(),
     post: vi.fn(),
     patch: vi.fn(),
