@@ -13,7 +13,9 @@ export const ListDocumentsSchema = z
     filter_name: z
       .string()
       .optional()
-      .describe("Filter by document name (partial match)"),
+      .describe(
+        "Filter by document name (case-insensitive substring match, performed client-side over the full document list)"
+      ),
     filter_id: z
       .number()
       .int()

@@ -8,7 +8,7 @@ import {
   truncateIfNeeded,
 } from "../services/itglue-client.js";
 import { ResponseFormat } from "../constants.js";
-import type { ITGlueOrganization } from "../types.js";
+import type { ITGlueOrganization, PaginatedResult } from "../types.js";
 import {
   ListOrganizationsSchema,
   GetOrganizationSchema,
@@ -28,8 +28,10 @@ export function registerOrganizationTools(
 
 Supports filtering by name, ID, type, and status. Results are paginated.
 
+Note: filter_name is matched by case-insensitive substring client-side (the ITGlue API's name filter is exact-match only); ID/type/status filters are applied server-side.
+
 Args:
-  - filter_name (string, optional): Filter by organization name (partial match)
+  - filter_name (string, optional): Filter by organization name (case-insensitive substring match; fetches all organizations and filters client-side)
   - filter_id (number, optional): Filter by specific organization ID
   - filter_organization_type_id (number, optional): Filter by organization type
   - filter_organization_status_id (number, optional): Filter by status
@@ -58,21 +60,51 @@ Error Handling:
     },
     async (params: ListOrganizationsInput) => {
       try {
-        const queryParams: Record<string, string | number> = {
-          ...buildPaginationParams(params.page_number, params.page_size),
-          ...buildFilterParams({
-            name: params.filter_name,
-            id: params.filter_id,
-            organization_type_id: params.filter_organization_type_id,
-            organization_status_id: params.filter_organization_status_id,
-          }),
-        };
-        if (params.sort) queryParams.sort = params.sort;
+        // The ITGlue API's filter[name] is exact-match (not substring), so name
+        // is matched client-side below; the other filters are exact and stay on
+        // the wire.
+        const wireFilters = buildFilterParams({
+          id: params.filter_id,
+          organization_type_id: params.filter_organization_type_id,
+          organization_status_id: params.filter_organization_status_id,
+        });
+        const sortParams: Record<string, string | number> = params.sort
+          ? { sort: params.sort }
+          : {};
 
-        const result = await client.getMany<ITGlueOrganization>(
-          "/organizations",
-          queryParams
-        );
+        let result: PaginatedResult<ITGlueOrganization>;
+
+        if (params.filter_name) {
+          // SEARCH MODE: fetch all organizations and match by substring locally.
+          const allOrgs = await client.getAll<ITGlueOrganization>(
+            "/organizations",
+            { ...wireFilters, ...sortParams }
+          );
+
+          const needle = params.filter_name.toLowerCase();
+          const filtered = allOrgs.filter((org) =>
+            (org.name ?? "").toLowerCase().includes(needle)
+          );
+
+          const start = (params.page_number - 1) * params.page_size;
+          const pageData = filtered.slice(start, start + params.page_size);
+          const moreAvailable = start + params.page_size < filtered.length;
+
+          result = {
+            data: pageData,
+            total_count: filtered.length,
+            page_number: params.page_number,
+            page_size: params.page_size,
+            has_more: moreAvailable,
+            next_page: moreAvailable ? params.page_number + 1 : null,
+          };
+        } else {
+          result = await client.getMany<ITGlueOrganization>("/organizations", {
+            ...buildPaginationParams(params.page_number, params.page_size),
+            ...wireFilters,
+            ...sortParams,
+          });
+        }
 
         if (result.data.length === 0) {
           return {

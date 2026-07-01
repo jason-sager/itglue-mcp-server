@@ -137,6 +137,10 @@ Add `--region eu` or `--region au` to the args:
 | `itglue_update_document_section` | Update section content, type, or position |
 | `itglue_delete_document_section` | Permanently delete a section |
 
+## Search & Filtering
+
+`filter_name` on `itglue_list_documents` and `itglue_list_organizations` performs a **case-insensitive substring match**. The ITGlue API cannot filter documents by name (and its organization name filter is exact-match only), so name filtering is applied **client-side**: the tool retrieves the full list for the scope and matches locally, then paginates. ID, type, and status filters are exact and applied server-side. When you already know the exact ID, prefer `filter_id` to avoid fetching the whole list.
+
 ## API Key Setup
 
 1. Log in to ITGlue as an Administrator

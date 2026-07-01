@@ -6,7 +6,9 @@ export const ListOrganizationsSchema = z
     filter_name: z
       .string()
       .optional()
-      .describe("Filter by organization name (partial match)"),
+      .describe(
+        "Filter by organization name (case-insensitive substring match, performed client-side over the full list)"
+      ),
     filter_id: z
       .number()
       .int()

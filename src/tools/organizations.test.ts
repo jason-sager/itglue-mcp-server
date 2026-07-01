@@ -33,7 +33,7 @@ describe("registerOrganizationTools", () => {
   describe("itglue_list_organizations", () => {
     const handler = () => handlers["itglue_list_organizations"];
 
-    it("calls getMany with correct path and params", async () => {
+    it("browse mode: calls getMany with pagination and no filter[name]", async () => {
       mockClient.getMany.mockResolvedValue({
         data: [],
         total_count: 0,
@@ -44,7 +44,7 @@ describe("registerOrganizationTools", () => {
       } satisfies PaginatedResult<ITGlueOrganization>);
 
       await handler()({
-        filter_name: "Acme",
+        filter_id: 7,
         page_number: 1,
         page_size: 50,
         response_format: "markdown",
@@ -53,8 +53,56 @@ describe("registerOrganizationTools", () => {
       expect(mockClient.getMany).toHaveBeenCalledWith("/organizations", {
         "page[number]": 1,
         "page[size]": 50,
-        "filter[name]": "Acme",
+        "filter[id]": 7,
       });
+      expect(mockClient.getAll).not.toHaveBeenCalled();
+    });
+
+    it("search mode: uses getAll and substring-filters, never sends filter[name]", async () => {
+      mockClient.getAll.mockResolvedValue([
+        { id: "1", name: "Acme Corp", updated_at: "2024-01-01" },
+        { id: "2", name: "Beta LLC", updated_at: "2024-01-01" },
+      ]);
+
+      const result = await handler()({
+        filter_name: "acme",
+        page_number: 1,
+        page_size: 50,
+        response_format: "markdown",
+      });
+
+      expect(mockClient.getAll).toHaveBeenCalledTimes(1);
+      expect(mockClient.getAll.mock.calls[0][0]).toBe("/organizations");
+      expect(mockClient.getAll.mock.calls[0][1]).not.toHaveProperty(
+        "filter[name]"
+      );
+      expect(mockClient.getMany).not.toHaveBeenCalled();
+
+      const text = result.content[0].text;
+      expect(text).toContain("Acme Corp");
+      expect(text).not.toContain("Beta LLC");
+      expect(text).toContain("1 total");
+    });
+
+    it("search mode: paginates the filtered list client-side", async () => {
+      const orgs = Array.from({ length: 5 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Client ${i + 1}`,
+        updated_at: "2024-01-01",
+      }));
+      mockClient.getAll.mockResolvedValue(orgs);
+
+      const result = await handler()({
+        filter_name: "client",
+        page_number: 2,
+        page_size: 2,
+        response_format: "json",
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.data.map((o: { id: string }) => o.id)).toEqual(["3", "4"]);
+      expect(parsed.total_count).toBe(5);
+      expect(parsed.has_more).toBe(true);
     });
 
     it("returns empty results message", async () => {

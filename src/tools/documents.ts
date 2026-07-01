@@ -51,11 +51,13 @@ export function registerDocumentTools(
 
 Returns document metadata including name, organization, published status, and timestamps. Does NOT return document content — use itglue_get_document for full content. Use itglue_list_organizations first if you need to find the organization ID.
 
-Internally makes two API calls to retrieve both root-level and folder-nested documents, then merges the results. Pagination params apply to each call separately, so up to 2x page_size results may be returned.
+Internally makes two API calls to retrieve both root-level and folder-nested documents, then merges the results.
+
+When filter_name is provided, ALL documents for the organization are retrieved and matched by case-insensitive substring locally (the ITGlue API cannot filter documents by name), then paginated — so the results are exactly the matches for the requested page. When filter_name is omitted, pagination params apply to each of the two calls separately, so up to 2x page_size results may be returned.
 
 Args:
   - organization_id (number, required): Organization ID to list documents for
-  - filter_name (string, optional): Filter by document name (partial match)
+  - filter_name (string, optional): Filter by document name (case-insensitive substring match; fetches all documents and filters client-side)
   - filter_id (number, optional): Filter by specific document ID
   - sort (string, optional): Sort field (e.g. "name", "-updated_at")
   - page_number (number, default 1): Page number
@@ -85,43 +87,83 @@ Error Handling:
       try {
         const path = `/organizations/${params.organization_id}/relationships/documents`;
 
+        // Note: the ITGlue API does not support filtering documents by name
+        // (filter[name] is silently ignored on this endpoint), so name is NOT
+        // sent on the wire — it is matched client-side below. filter_id is a
+        // genuine server-side exact match and stays on the wire.
         const baseQueryParams: Record<string, string | number> = {
           ...buildPaginationParams(params.page_number, params.page_size),
-          ...buildFilterParams({
-            name: params.filter_name,
-            id: params.filter_id,
-          }),
+          ...buildFilterParams({ id: params.filter_id }),
         };
         if (params.sort) baseQueryParams.sort = params.sort;
 
-        // Call 1: Root-level documents (default API behavior)
-        const rootResult = await client.getMany<ITGlueDocument>(
-          path,
-          baseQueryParams
-        );
-
-        // Call 2: Documents inside folders
+        // Documents inside folders are excluded from the default (root-level)
+        // listing, so a second call with this filter is merged in.
         const folderQueryParams: Record<string, string | number> = {
           ...baseQueryParams,
           "filter[document-folder-id][ne]": "null",
         };
-        const folderResult = await client.getMany<ITGlueDocument>(
-          path,
-          folderQueryParams
-        );
 
-        // Merge and deduplicate by document ID
-        const seen = new Set<string>();
-        const allData: ITGlueDocument[] = [];
-        for (const doc of [...rootResult.data, ...folderResult.data]) {
-          if (!seen.has(doc.id)) {
-            seen.add(doc.id);
-            allData.push(doc);
+        let allData: ITGlueDocument[];
+        let totalCount: number;
+        let hasMore: boolean;
+
+        if (params.filter_name) {
+          // SEARCH MODE: fetch every document (root + folder), then match by
+          // case-insensitive substring locally and paginate the results.
+          const rootDocs = await client.getAll<ITGlueDocument>(
+            path,
+            baseQueryParams
+          );
+          const folderDocs = await client.getAll<ITGlueDocument>(
+            path,
+            folderQueryParams
+          );
+
+          const seen = new Set<string>();
+          const merged: ITGlueDocument[] = [];
+          for (const doc of [...rootDocs, ...folderDocs]) {
+            if (!seen.has(doc.id)) {
+              seen.add(doc.id);
+              merged.push(doc);
+            }
           }
-        }
 
-        const totalCount = rootResult.total_count + folderResult.total_count;
-        const hasMore = rootResult.has_more || folderResult.has_more;
+          const needle = params.filter_name.toLowerCase();
+          const filtered = merged.filter((doc) =>
+            (doc.name ?? "").toLowerCase().includes(needle)
+          );
+
+          totalCount = filtered.length;
+          const start = (params.page_number - 1) * params.page_size;
+          allData = filtered.slice(start, start + params.page_size);
+          hasMore = start + params.page_size < totalCount;
+        } else {
+          // BROWSE MODE: two single-page calls (root + folder), merged and
+          // deduplicated by document ID.
+          const rootResult = await client.getMany<ITGlueDocument>(
+            path,
+            baseQueryParams
+          );
+          const folderResult = await client.getMany<ITGlueDocument>(
+            path,
+            folderQueryParams
+          );
+
+          const seen = new Set<string>();
+          allData = [];
+          for (const doc of [...rootResult.data, ...folderResult.data]) {
+            if (!seen.has(doc.id)) {
+              seen.add(doc.id);
+              allData.push(doc);
+            }
+          }
+
+          // Deduplicated row count for this page (fixes the previous
+          // double-counted rootResult.total_count + folderResult.total_count).
+          totalCount = allData.length;
+          hasMore = rootResult.has_more || folderResult.has_more;
+        }
 
         if (allData.length === 0) {
           return {

@@ -6,7 +6,13 @@ import type {
   JsonApiResponse,
   PaginatedResult,
 } from "../types.js";
-import { CHARACTER_LIMIT } from "../constants.js";
+import { CHARACTER_LIMIT, MAX_PAGE_SIZE } from "../constants.js";
+
+// Hard cap on the number of pages getAll will fetch, protecting against a
+// runaway loop if the API's pagination meta ever misbehaves. 50 pages at the
+// maximum page size (1000) covers up to 50k records — well beyond any realistic
+// per-organization document library.
+export const GET_ALL_MAX_PAGES = 50;
 
 // ─── JSON:API Helpers ─────────────────────────────────────────────
 
@@ -272,6 +278,41 @@ export class ITGlueClient {
       has_more: nextPage !== null,
       next_page: nextPage,
     };
+  }
+
+  /**
+   * Fetch every page of a paginated endpoint and return the concatenated
+   * results. Pages are requested at the maximum page size to minimize round
+   * trips. Iteration stops when the API stops advertising a next page, and is
+   * additionally protected by three guards against non-termination:
+   *   - a hard page cap (GET_ALL_MAX_PAGES),
+   *   - an empty page (nothing left to accumulate),
+   *   - a next_page value that does not strictly advance.
+   */
+  async getAll<T extends Record<string, unknown>>(
+    path: string,
+    params?: Record<string, string | number>
+  ): Promise<T[]> {
+    const all: T[] = [];
+    let pageNumber = 1;
+
+    for (let page = 0; page < GET_ALL_MAX_PAGES; page++) {
+      const result = await this.getMany<T>(path, {
+        ...params,
+        "page[number]": pageNumber,
+        "page[size]": MAX_PAGE_SIZE,
+      });
+
+      if (result.data.length === 0) break;
+      all.push(...result.data);
+
+      if (!result.has_more || result.next_page === null) break;
+      if (result.next_page <= pageNumber) break;
+
+      pageNumber = result.next_page;
+    }
+
+    return all;
   }
 
   async post<T extends Record<string, unknown>>(

@@ -106,7 +106,7 @@ describe("registerDocumentTools", () => {
       );
     });
 
-    it("passes filter and pagination params to both calls", async () => {
+    it("browse mode: sends filter_id and sort (never filter[name]) to both calls", async () => {
       mockClient.getMany.mockResolvedValue({
         ...emptyResult,
         page_size: 25,
@@ -114,7 +114,6 @@ describe("registerDocumentTools", () => {
 
       await handler()({
         organization_id: 123,
-        filter_name: "runbook",
         filter_id: 5,
         sort: "-updated_at",
         page_number: 2,
@@ -125,13 +124,45 @@ describe("registerDocumentTools", () => {
       const expectedBase = {
         "page[number]": 2,
         "page[size]": 25,
-        "filter[name]": "runbook",
         "filter[id]": 5,
         sort: "-updated_at",
       };
 
       expect(mockClient.getMany.mock.calls[0][1]).toMatchObject(expectedBase);
       expect(mockClient.getMany.mock.calls[1][1]).toMatchObject(expectedBase);
+      expect(mockClient.getMany.mock.calls[0][1]).not.toHaveProperty(
+        "filter[name]"
+      );
+      expect(mockClient.getMany.mock.calls[1][1]).not.toHaveProperty(
+        "filter[name]"
+      );
+    });
+
+    it("search mode: uses getAll for root and folder, never sends filter[name]", async () => {
+      mockClient.getAll.mockResolvedValue([]);
+
+      await handler()({
+        organization_id: 123,
+        filter_name: "runbook",
+        filter_id: 5,
+        page_number: 1,
+        page_size: 50,
+        response_format: "markdown",
+      });
+
+      expect(mockClient.getAll).toHaveBeenCalledTimes(2);
+      expect(mockClient.getMany).not.toHaveBeenCalled();
+
+      const rootParams = mockClient.getAll.mock.calls[0][1];
+      const folderParams = mockClient.getAll.mock.calls[1][1];
+      expect(rootParams).not.toHaveProperty("filter[document-folder-id][ne]");
+      expect(folderParams).toHaveProperty(
+        "filter[document-folder-id][ne]",
+        "null"
+      );
+      expect(rootParams).not.toHaveProperty("filter[name]");
+      expect(folderParams).not.toHaveProperty("filter[name]");
+      expect(rootParams).toHaveProperty("filter[id]", 5);
     });
 
     it("combines results from both calls", async () => {
@@ -216,7 +247,8 @@ describe("registerDocumentTools", () => {
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.has_more).toBe(true);
-      expect(parsed.total_count).toBe(105);
+      // Deduped row count for the page — not the double-counted 100 + 5.
+      expect(parsed.total_count).toBe(2);
     });
 
     it("returns empty results message when both calls return no data", async () => {
@@ -248,6 +280,89 @@ describe("registerDocumentTools", () => {
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.data).toHaveLength(1);
+    });
+
+    it("search mode: filters merged docs by case-insensitive substring", async () => {
+      mockClient.getAll
+        .mockResolvedValueOnce([
+          { id: "1", name: "Network Guide", published: true, updated_at: "2024-01-01" },
+          { id: "2", name: "Billing Policy", published: true, updated_at: "2024-01-01" },
+        ])
+        .mockResolvedValueOnce([
+          { id: "3", name: "VPN network setup", published: true, updated_at: "2024-01-01" },
+        ]);
+
+      const result = await handler()({
+        organization_id: 123,
+        filter_name: "NETWORK",
+        page_number: 1,
+        page_size: 50,
+        response_format: "markdown",
+      });
+
+      const text = result.content[0].text;
+      expect(text).toContain("Network Guide");
+      expect(text).toContain("VPN network setup");
+      expect(text).not.toContain("Billing Policy");
+      expect(text).toContain("2 total");
+    });
+
+    it("search mode: dedups across root and folder before matching", async () => {
+      mockClient.getAll
+        .mockResolvedValueOnce([{ id: "1", name: "Shared network doc" }])
+        .mockResolvedValueOnce([{ id: "1", name: "Shared network doc" }]);
+
+      const result = await handler()({
+        organization_id: 123,
+        filter_name: "network",
+        page_number: 1,
+        page_size: 50,
+        response_format: "json",
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.data).toHaveLength(1);
+      expect(parsed.total_count).toBe(1);
+    });
+
+    it("search mode: paginates the filtered list client-side", async () => {
+      const docs = Array.from({ length: 5 }, (_, i) => ({
+        id: String(i + 1),
+        name: `doc ${i + 1}`,
+        published: true,
+        updated_at: "2024-01-01",
+      }));
+      mockClient.getAll.mockResolvedValueOnce(docs).mockResolvedValueOnce([]);
+
+      const result = await handler()({
+        organization_id: 123,
+        filter_name: "doc",
+        page_number: 2,
+        page_size: 2,
+        response_format: "json",
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.data.map((d: { id: string }) => d.id)).toEqual(["3", "4"]);
+      expect(parsed.total_count).toBe(5);
+      expect(parsed.has_more).toBe(true);
+      expect(parsed.next_page).toBe(3);
+    });
+
+    it("search mode: returns empty message when nothing matches", async () => {
+      mockClient.getAll
+        .mockResolvedValueOnce([{ id: "1", name: "Alpha" }])
+        .mockResolvedValueOnce([]);
+
+      const result = await handler()({
+        organization_id: 123,
+        filter_name: "zzz",
+        page_number: 1,
+        page_size: 50,
+        response_format: "markdown",
+      });
+
+      expect(result.content[0].text).toContain("No documents found");
     });
   });
 

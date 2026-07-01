@@ -87,6 +87,7 @@ export function makeMockClient() {
   return {
     getOne: vi.fn(),
     getMany: vi.fn(),
+    getAll: vi.fn(),
     post: vi.fn(),
     patch: vi.fn(),
     delete: vi.fn(),

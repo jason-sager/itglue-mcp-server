@@ -11,8 +11,9 @@ import {
   truncateIfNeeded,
   paginationFooter,
   ITGlueClient,
+  GET_ALL_MAX_PAGES,
 } from "./itglue-client.js";
-import { CHARACTER_LIMIT } from "../constants.js";
+import { CHARACTER_LIMIT, MAX_PAGE_SIZE } from "../constants.js";
 import {
   makeResource,
   makeOrganizationResource,
@@ -442,6 +443,105 @@ describe("ITGlueClient", () => {
 
       const result = await client.getMany("/organizations");
       expect(result.data).toHaveLength(1);
+    });
+  });
+
+  describe("getAll", () => {
+    it("accumulates data across pages until next-page is null", async () => {
+      getMockHttp()
+        .get.mockResolvedValueOnce(
+          makeResponse(
+            [makeOrganizationResource(), makeOrganizationResource({ name: "B" })],
+            { "total-count": 3, "current-page": 1, "next-page": 2 }
+          )
+        )
+        .mockResolvedValueOnce(
+          makeResponse([makeOrganizationResource({ name: "C" })], {
+            "total-count": 3,
+            "current-page": 2,
+            "next-page": null,
+          })
+        );
+
+      const result = await client.getAll("/organizations");
+      expect(result).toHaveLength(3);
+      expect(getMockHttp().get).toHaveBeenCalledTimes(2);
+    });
+
+    it("requests page[size] = MAX_PAGE_SIZE", async () => {
+      getMockHttp().get.mockResolvedValue(
+        makeResponse([makeOrganizationResource()], {
+          "total-count": 1,
+          "current-page": 1,
+          "next-page": null,
+        })
+      );
+
+      await client.getAll("/organizations");
+      expect(getMockHttp().get).toHaveBeenCalledWith("/organizations", {
+        params: expect.objectContaining({
+          "page[number]": 1,
+          "page[size]": MAX_PAGE_SIZE,
+        }),
+      });
+    });
+
+    it("stops after a single page when next-page is null", async () => {
+      getMockHttp().get.mockResolvedValue(
+        makeResponse([makeOrganizationResource()], {
+          "total-count": 1,
+          "current-page": 1,
+          "next-page": null,
+        })
+      );
+
+      const result = await client.getAll("/organizations");
+      expect(result).toHaveLength(1);
+      expect(getMockHttp().get).toHaveBeenCalledTimes(1);
+    });
+
+    it("breaks on an empty page", async () => {
+      getMockHttp().get.mockResolvedValue(
+        makeResponse([], { "total-count": 0, "current-page": 1, "next-page": 2 })
+      );
+
+      const result = await client.getAll("/organizations");
+      expect(result).toHaveLength(0);
+      expect(getMockHttp().get).toHaveBeenCalledTimes(1);
+    });
+
+    it("breaks when next_page does not advance", async () => {
+      getMockHttp().get.mockResolvedValue(
+        makeResponse([makeOrganizationResource()], {
+          "total-count": 100,
+          "current-page": 1,
+          "next-page": 1,
+        })
+      );
+
+      const result = await client.getAll("/organizations");
+      expect(result).toHaveLength(1);
+      expect(getMockHttp().get).toHaveBeenCalledTimes(1);
+    });
+
+    it("respects the hard page cap", async () => {
+      // Always advertise an ever-advancing next page with one item per page.
+      let page = 1;
+      getMockHttp().get.mockImplementation(() => {
+        const current = page;
+        page += 1;
+        return Promise.resolve(
+          makeResponse([makeOrganizationResource({ name: `Org ${current}` })], {
+            "total-count": 999999,
+            "current-page": current,
+            "next-page": current + 1,
+          })
+        );
+      });
+
+      const result = await client.getAll("/organizations");
+      expect(getMockHttp().get).toHaveBeenCalledTimes(GET_ALL_MAX_PAGES);
+      expect(result).toHaveLength(GET_ALL_MAX_PAGES);
     });
   });
 
