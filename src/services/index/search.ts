@@ -4,11 +4,18 @@ import {
   normalizeTextToTerms,
   termOverlap,
 } from "./normalize.js";
-import type { ContentDocEntry, SearchResponse, SearchResultItem } from "./types.js";
+import type {
+  ContentDocEntry,
+  SearchResponse,
+  SearchResultItem,
+  TitleEntry,
+} from "./types.js";
 
 export interface SearchParams {
   query: string;
   organizationId?: string;
+  /** Restrict to these entity types; empty/undefined searches all indexed. */
+  entityTypes?: string[];
   searchContent: boolean;
   pageNumber: number;
   pageSize: number;
@@ -24,12 +31,12 @@ const CONTENT_WEIGHT = 1;
 const PHRASE_BONUS = 2;
 
 /** Keyword search over the cached titles (+ optional content) index. */
-export class DocumentSearcher {
+export class EntitySearcher {
   constructor(private readonly store: IndexStore) {}
 
   async search(params: SearchParams): Promise<SearchOutcome> {
-    const titles = await this.store.readTitles();
-    if (!titles) {
+    const available = await this.store.listTitleEntityTypes();
+    if (available.length === 0) {
       return {
         status: "no-index",
         message:
@@ -47,35 +54,51 @@ export class DocumentSearcher {
     }
     const rawQuery = params.query.trim().toLowerCase();
 
-    let entries = titles.entries;
-    if (params.organizationId) {
-      entries = entries.filter((e) => e.org_id === params.organizationId);
+    const requested =
+      params.entityTypes && params.entityTypes.length > 0
+        ? params.entityTypes.filter((e) => available.includes(e))
+        : available;
+
+    // Merge titles across the requested entity types.
+    const entries: TitleEntry[] = [];
+    let titlesBuiltAt: string | null = null;
+    for (const entityType of requested) {
+      const titles = await this.store.readTitles(entityType);
+      if (!titles) continue;
+      entries.push(...titles.entries);
+      if (titles.builtAt && (!titlesBuiltAt || titles.builtAt > titlesBuiltAt)) {
+        titlesBuiltAt = titles.builtAt;
+      }
     }
 
-    // Cache content shards per org (loaded lazily, only when searching content).
+    const scoped = params.organizationId
+      ? entries.filter((e) => e.org_id === params.organizationId)
+      : entries;
+
+    // Content shards are keyed by (entity_type, org_id); load lazily.
     const shardCache = new Map<string, Map<string, ContentDocEntry> | null>();
     const missingContentOrgs = new Set<string>();
     const loadShard = async (
+      entityType: string,
       orgId: string
     ): Promise<Map<string, ContentDocEntry> | null> => {
-      if (shardCache.has(orgId)) return shardCache.get(orgId) ?? null;
-      const shard = await this.store.readContentShard(orgId);
-      const map = shard
-        ? new Map(shard.entries.map((e) => [e.id, e]))
-        : null;
-      shardCache.set(orgId, map);
+      const key = `${entityType}::${orgId}`;
+      if (shardCache.has(key)) return shardCache.get(key) ?? null;
+      const shard = await this.store.readContentShard(entityType, orgId);
+      const map = shard ? new Map(shard.entries.map((e) => [e.id, e])) : null;
+      shardCache.set(key, map);
       if (!map) missingContentOrgs.add(orgId);
       return map;
     };
 
     const results: SearchResultItem[] = [];
-    for (const t of entries) {
+    for (const t of scoped) {
       const titleMatches = termOverlap(qTerms, normalizeTextToTerms(t.name));
 
       let contentMatches: string[] = [];
       let contentIndexed = false;
       if (params.searchContent) {
-        const shard = await loadShard(t.org_id);
+        const shard = await loadShard(t.entity_type, t.org_id);
         const entry = shard?.get(t.id);
         if (entry) {
           contentIndexed = true;
@@ -93,18 +116,20 @@ export class DocumentSearcher {
         phraseBonus;
 
       if (score > 0) {
-        results.push({
+        const item: SearchResultItem = {
           id: t.id,
           name: t.name,
+          entity_type: t.entity_type,
           org_id: t.org_id,
           org_name: t.org_name,
           updated_at: t.updated_at,
-          published: t.published,
           score,
           title_matches: titleMatches,
           content_matches: contentMatches,
           content_indexed: contentIndexed,
-        });
+        };
+        if (t.published !== undefined) item.published = t.published;
+        results.push(item);
       }
     }
 
@@ -128,8 +153,9 @@ export class DocumentSearcher {
         page_number: params.pageNumber,
         page_size: params.pageSize,
         has_more: start + params.pageSize < total,
-        titles_built_at: titles.builtAt,
+        titles_built_at: titlesBuiltAt,
         searched_content: params.searchContent,
+        searched_entities: requested,
         content_orgs_missing: [...missingContentOrgs],
       },
     };

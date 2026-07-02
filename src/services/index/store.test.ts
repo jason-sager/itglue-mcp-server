@@ -52,28 +52,30 @@ describe("IndexStore schema-version gate", () => {
     const store = makeStore();
     const titles: TitlesIndex = {
       schemaVersion: INDEX_SCHEMA_VERSION,
+      entity_type: "documents",
       builtAt: "2026-01-01T00:00:00.000Z",
       host: "api.itglue.com",
       entries: [],
     };
     await store.writeTitles(titles);
-    expect(await store.readTitles()).toEqual(titles);
-    expect(await store.titlesSize()).toBeGreaterThan(0);
+    expect(await store.readTitles("documents")).toEqual(titles);
+    expect(await store.titlesSize("documents")).toBeGreaterThan(0);
   });
 
   it("treats a mismatched schemaVersion as missing", async () => {
     const store = makeStore();
     await writeGzipJson(
-      buildIndexPaths(tmpDir, "https://api.itglue.com").titles,
-      { schemaVersion: 999, builtAt: "t", host: "h", entries: [] }
+      buildIndexPaths(tmpDir, "https://api.itglue.com").titles("documents"),
+      { schemaVersion: 999, entity_type: "documents", builtAt: "t", host: "h", entries: [] }
     );
-    expect(await store.readTitles()).toBeNull();
+    expect(await store.readTitles("documents")).toBeNull();
   });
 
   it("round-trips and deletes a content shard", async () => {
     const store = makeStore();
     const shard: ContentShard = {
       schemaVersion: INDEX_SCHEMA_VERSION,
+      entity_type: "documents",
       org_id: "42",
       org_name: "Acme",
       builtAt: "2026-01-01T00:00:00.000Z",
@@ -81,8 +83,8 @@ describe("IndexStore schema-version gate", () => {
       entries: [{ id: "1", updated_at: "t", terms: ["vpn"] }],
     };
     await store.writeContentShard(shard);
-    expect(await store.readContentShard("42")).toEqual(shard);
-    await store.deleteContentShard("42");
-    expect(await store.readContentShard("42")).toBeNull();
+    expect(await store.readContentShard("documents", "42")).toEqual(shard);
+    await store.deleteContentShard("documents", "42");
+    expect(await store.readContentShard("documents", "42")).toBeNull();
   });
 });

@@ -1,11 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { paginationFooter } from "../services/itglue-client.js";
 import { textResult, errorResult, jsonOrMarkdown } from "./_shared.js";
-import { ResponseFormat } from "../constants.js";
-import type { DocumentIndexer } from "../services/index/indexer.js";
-import type { DocumentSearcher } from "../services/index/search.js";
+import type { EntityIndexer } from "../services/index/indexer.js";
+import type { EntitySearcher } from "../services/index/search.js";
 import type { IndexStore } from "../services/index/store.js";
-import type { BuildReport, IndexManifest } from "../services/index/types.js";
+import type {
+  BuildReport,
+  EntityManifest,
+  IndexManifest,
+} from "../services/index/types.js";
 import {
   IndexDocumentsSchema,
   SearchDocumentsSchema,
@@ -28,6 +31,7 @@ function formatBuildReport(report: BuildReport): string {
   const lines: string[] = [
     `# Index ${report.mode === "full" ? "Build" : "Update"} Complete`,
     "",
+    `- **Entity**: ${report.entityType}`,
     `- **Mode**: ${report.mode}`,
     `- **Scope**: ${scope}`,
     `- **Organizations processed**: ${report.orgsProcessed}`,
@@ -40,7 +44,7 @@ function formatBuildReport(report: BuildReport): string {
   }
   if (report.includeContent) {
     lines.push(
-      `- **Content documents indexed**: ${report.contentDocsIndexed} (path: ${report.contentPath ?? "n/a"})`
+      `- **Content records indexed**: ${report.contentDocsIndexed} (path: ${report.contentPath ?? "n/a"})`
     );
   }
   lines.push(
@@ -49,6 +53,11 @@ function formatBuildReport(report: BuildReport): string {
     `- **Cache size**: ${formatBytes(report.cacheBytes)}`,
     `- **Cache path**: ${report.cachePath}`
   );
+  if (report.schemaRebuilt) {
+    lines.push(
+      "- **Schema**: rebuilt for a new cache version (the previous cache was discarded and is being repopulated)."
+    );
+  }
   if (report.capabilities) {
     const c = report.capabilities;
     lines.push(
@@ -58,71 +67,101 @@ function formatBuildReport(report: BuildReport): string {
   if (!report.includeContent && report.organizationId) {
     lines.push(
       "",
-      "Tip: pass include_content: true (with this organization_id) to also index document body content."
+      "Tip: pass include_content: true (with this organization_id) to also index body content."
     );
   }
   return lines.join("\n");
 }
 
-function formatManifest(
-  manifest: IndexManifest,
+function formatEntitySection(
+  entity: EntityManifest,
   organizationId?: string
-): string {
+): string[] {
+  const orgs = Object.values(entity.orgs)
+    .filter((o) => !organizationId || o.org_id === organizationId)
+    .sort((a, b) => b.titlesCount - a.titlesCount);
+
+  if (organizationId && orgs.length === 0) return [];
+
   const lines: string[] = [
-    `# ITGlue Search Index Status`,
-    "",
-    `- **Cache path**: ${manifest.host}`,
-    `- **Titles**: ${manifest.totals.titleCount} documents across ${manifest.totals.orgCount} organizations` +
-      (manifest.titles.builtAt ? ` (built ${manifest.titles.builtAt})` : ""),
-    `- **Content-indexed organizations**: ${manifest.totals.contentOrgCount} (${manifest.totals.contentDocCount} documents)`,
-    `- **Total cache size**: ${formatBytes(manifest.totals.bytesOnDisk)}`,
+    `## ${entity.entity_type}`,
+    `- **Titles**: ${entity.titles.count}` +
+      (entity.titles.builtAt ? ` (built ${entity.titles.builtAt})` : ""),
   ];
-  if (manifest.capabilities) {
-    const c = manifest.capabilities;
+  if (entity.capabilities) {
+    const c = entity.capabilities;
     lines.push(
       `- **API capabilities**: sideload=${c.sideloadSections}, sparse=${c.sparseFieldsets}, global-sweep=${c.globalDocumentsSweep}`
     );
   }
   lines.push("");
 
-  const entries = Object.values(manifest.orgs)
-    .filter((o) => !organizationId || o.org_id === organizationId)
-    .sort((a, b) => b.titlesCount - a.titlesCount);
-
-  if (entries.length === 0) {
-    lines.push("*No organizations indexed.*");
-    return lines.join("\n");
+  if (orgs.length === 0) {
+    lines.push("*No organizations indexed.*", "");
+    return lines;
   }
 
-  lines.push("## Organizations", "");
-  for (const o of entries) {
+  for (const o of orgs) {
     const content = o.contentIndexed
-      ? `content: ${o.contentDocCount} docs, ${formatBytes(o.contentBytesOnDisk)}` +
+      ? `content: ${o.contentDocCount} records, ${formatBytes(o.contentBytesOnDisk)}` +
         (o.lastPathUsed ? ` (${o.lastPathUsed})` : "")
       : "content: not indexed";
     lines.push(
       `- **${o.org_name}** (ID: ${o.org_id}) — ${o.titlesCount} titles; ${content}`
     );
   }
+  lines.push("");
+  return lines;
+}
+
+function formatManifest(
+  manifest: IndexManifest,
+  organizationId?: string
+): string {
+  const entityTypes = Object.keys(manifest.entities).sort();
+  const lines: string[] = [
+    `# ITGlue Search Index Status`,
+    "",
+    `- **Cache path**: ${manifest.host}`,
+    `- **Entities indexed**: ${manifest.totals.entityCount}${
+      entityTypes.length ? ` (${entityTypes.join(", ")})` : ""
+    }`,
+    `- **Titles**: ${manifest.totals.titleCount} records across ${manifest.totals.orgCount} organizations`,
+    `- **Content-indexed organizations**: ${manifest.totals.contentOrgCount} (${manifest.totals.contentDocCount} records)`,
+    `- **Total cache size**: ${formatBytes(manifest.totals.bytesOnDisk)}`,
+    "",
+  ];
+
+  if (entityTypes.length === 0) {
+    lines.push("*Nothing indexed yet.*");
+    return lines.join("\n");
+  }
+
+  for (const entityType of entityTypes) {
+    lines.push(...formatEntitySection(manifest.entities[entityType], organizationId));
+  }
+  // Drop the trailing blank line for a stable footer-free ending.
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines.join("\n");
 }
 
 export function registerIndexTools(
   server: McpServer,
-  indexer: DocumentIndexer,
-  searcher: DocumentSearcher,
+  indexer: EntityIndexer,
+  searcher: EntitySearcher,
   store: IndexStore
 ): void {
   server.registerTool(
     "itglue_index_documents",
     {
       title: "Build/Update ITGlue Search Index",
-      description: `Build or update the local, compressed document search index used by itglue_search_documents.
+      description: `Build or update the local, compressed search index used by itglue_search_documents.
 
-The TITLES tier is cheap and covers all organizations. The CONTENT tier indexes document body text (as keyword terms only — the original text is not stored or reconstructable) and is opt-in per organization because it costs roughly one API call per document.
+Indexes an entity type (documents or configurations). The TITLES tier is cheap and covers all organizations. The CONTENT tier indexes body text (as keyword terms only — the original text is not stored or reconstructable) and is opt-in per organization because it costs roughly one API call per document (configurations gather content from the record itself, so they are cheaper).
 
 Args:
-  - mode ("full"|"incremental", default "incremental"): "full" rebuilds; "incremental" re-sweeps titles and only re-fetches content for added/changed documents.
+  - entity_type ("documents"|"configurations", default "documents"): Which entity to index.
+  - mode ("full"|"incremental", default "incremental"): "full" rebuilds; "incremental" re-sweeps titles and only re-fetches content for added/changed records.
   - organization_id (number, optional): Scope to one org. REQUIRED when include_content is true. Omit for an all-orgs titles sweep.
   - include_content (boolean, default false): Also index body content (requires organization_id).
   - response_format ("markdown"|"json", default "markdown")
@@ -130,6 +169,7 @@ Args:
 Examples:
   - "Index all document titles" -> { mode: "full" }
   - "Index the contents of org 123" -> { mode: "full", organization_id: 123, include_content: true }
+  - "Index configuration titles" -> { entity_type: "configurations", mode: "full" }
   - "Refresh the index" -> { mode: "incremental" }
 
 Notes:
@@ -146,6 +186,7 @@ Notes:
     async (params: IndexDocumentsInput) => {
       try {
         const report = await indexer.build({
+          entityType: params.entity_type,
           mode: params.mode,
           organizationId:
             params.organization_id !== undefined
@@ -168,21 +209,22 @@ Notes:
   server.registerTool(
     "itglue_search_documents",
     {
-      title: "Search ITGlue Documents (Indexed)",
-      description: `Fast keyword search over the local document index (titles, and body content where indexed). Requires itglue_index_documents to have been run first; never calls the ITGlue API.
+      title: "Search ITGlue (Indexed)",
+      description: `Fast keyword search over the local index (titles, and body content where indexed). Searches all indexed entity types (documents and configurations) by default. Requires itglue_index_documents to have been run first; never calls the ITGlue API.
 
 Results are ranked by keyword overlap (title matches weighted above content matches). For a live, un-indexed lookup by name, use itglue_list_documents instead.
 
 Args:
   - query (string, required): Keywords to match.
   - organization_id (number, optional): Limit to one organization.
+  - entity_types (string[], optional): Restrict to entity types, e.g. ["configurations"]. Omit to search everything indexed.
   - search_content (boolean, default false): Also match indexed body content.
   - page_number (number, default 1), page_size (number, default 50, max 1000)
   - response_format ("markdown"|"json", default "markdown")
 
 Examples:
   - "Find the VPN runbook" -> { query: "vpn runbook" }
-  - "Search org 123 docs mentioning firewall" -> { query: "firewall", organization_id: 123, search_content: true }`,
+  - "Find the firewall config at org 123" -> { query: "firewall", organization_id: 123, entity_types: ["configurations"] }`,
       inputSchema: SearchDocumentsSchema,
       annotations: {
         readOnlyHint: true,
@@ -199,6 +241,7 @@ Examples:
             params.organization_id !== undefined
               ? String(params.organization_id)
               : undefined,
+          entityTypes: params.entity_types,
           searchContent: params.search_content,
           pageNumber: params.page_number,
           pageSize: params.page_size,
@@ -209,12 +252,12 @@ Examples:
         }
         const res = outcome.response;
 
-        if (params.response_format === ResponseFormat.JSON) {
+        if (params.response_format === "json") {
           return textResult(JSON.stringify(res, null, 2));
         }
 
         if (res.results.length === 0) {
-          return textResult(`No documents matched "${res.query}".`);
+          return textResult(`No results matched "${res.query}".`);
         }
 
         const lines: string[] = [
@@ -223,6 +266,7 @@ Examples:
         ];
         for (const r of res.results) {
           lines.push(`## ${r.name} (ID: ${r.id})`);
+          lines.push(`- **Type**: ${r.entity_type}`);
           lines.push(`- **Organization**: ${r.org_name} (ID: ${r.org_id})`);
           lines.push(`- **Score**: ${r.score}`);
           if (r.title_matches.length > 0)
@@ -258,7 +302,7 @@ Examples:
     "itglue_index_status",
     {
       title: "ITGlue Search Index Status",
-      description: `Report what is currently in the local document search index: organizations covered, title counts, which organizations have content indexed, cache sizes, and when each was last updated. Use this to decide whether to (re)build the index.
+      description: `Report what is currently in the local search index: entity types and organizations covered, title counts, which organizations have content indexed, cache sizes, and when each was last updated. Use this to decide whether to (re)build the index.
 
 Args:
   - organization_id (number, optional): Show status for a single organization.

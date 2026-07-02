@@ -100,6 +100,32 @@ export interface ITGlueDocumentSection {
   updated_at: string;
 }
 
+export interface ITGlueConfiguration {
+  [key: string]: unknown;
+  id: string;
+  type: string;
+  name: string;
+  organization_id: number | null;
+  organization_name: string | null;
+  configuration_type_id: number | null;
+  configuration_type_name: string | null;
+  configuration_status_id: number | null;
+  configuration_status_name: string | null;
+  hostname: string | null;
+  primary_ip: string | null;
+  mac_address: string | null;
+  serial_number: string | null;
+  asset_tag: string | null;
+  manufacturer_name: string | null;
+  model_name: string | null;
+  operating_system_notes: string | null;
+  notes: string | null;
+  resource_url: string | null;
+  archived: boolean | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PaginatedResult<T> {
   data: T[];
   total_count: number;

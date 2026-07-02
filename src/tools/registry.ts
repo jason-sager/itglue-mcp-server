@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ITGlueClient } from "../services/itglue-client.js";
 import { registerResource } from "./resource-factory.js";
 import { organizationsDescriptor } from "./organizations.js";
+import { configurationsDescriptor } from "./configurations.js";
 
 /**
  * Factory-driven resources, registered in one place. Adding a read-only
@@ -19,4 +20,5 @@ export function registerResourceTools(
   client: ITGlueClient
 ): void {
   registerResource(server, client, organizationsDescriptor);
+  registerResource(server, client, configurationsDescriptor);
 }

@@ -40,6 +40,7 @@ describe("registerIndexTools", () => {
 
   describe("itglue_index_documents", () => {
     const report = {
+      entityType: "documents",
       mode: "full",
       organizationId: "1",
       includeContent: true,
@@ -54,18 +55,21 @@ describe("registerIndexTools", () => {
       durationMs: 1000,
       cacheBytes: 2048,
       cachePath: "/cache",
+      schemaRebuilt: false,
       capabilities: null,
     };
 
     it("maps params to the indexer and formats the report", async () => {
       indexer.build.mockResolvedValue(report);
       const res = await handlers["itglue_index_documents"]({
+        entity_type: "documents",
         mode: "full",
         organization_id: 1,
         include_content: true,
         response_format: "markdown",
       });
       expect(indexer.build).toHaveBeenCalledWith({
+        entityType: "documents",
         mode: "full",
         organizationId: "1",
         includeContent: true,
@@ -106,6 +110,7 @@ describe("registerIndexTools", () => {
             {
               id: "1",
               name: "VPN Runbook",
+              entity_type: "documents",
               org_id: "1",
               org_name: "Acme",
               updated_at: "2024-01-01",
@@ -122,6 +127,7 @@ describe("registerIndexTools", () => {
           has_more: false,
           titles_built_at: "2026-01-01",
           searched_content: false,
+          searched_entities: ["documents"],
           content_orgs_missing: [],
         },
       });
@@ -164,26 +170,32 @@ describe("registerIndexTools", () => {
 
     it("formats the manifest", async () => {
       store.readManifest.mockResolvedValue({
-        schemaVersion: 1,
+        schemaVersion: 2,
         host: "api.itglue.com",
         createdAt: "t",
         updatedAt: "t",
-        capabilities: null,
-        titles: { count: 2, builtAt: "t", bytesOnDisk: 100 },
-        orgs: {
-          "1": {
-            org_id: "1",
-            org_name: "Acme",
-            titlesCount: 2,
-            contentIndexed: true,
-            contentDocCount: 2,
-            contentBytesOnDisk: 50,
-            lastTitlesAt: "t",
-            lastContentAt: "t",
-            lastPathUsed: "per-doc",
+        entities: {
+          documents: {
+            entity_type: "documents",
+            capabilities: null,
+            titles: { count: 2, builtAt: "t", bytesOnDisk: 100 },
+            orgs: {
+              "1": {
+                org_id: "1",
+                org_name: "Acme",
+                titlesCount: 2,
+                contentIndexed: true,
+                contentDocCount: 2,
+                contentBytesOnDisk: 50,
+                lastTitlesAt: "t",
+                lastContentAt: "t",
+                lastPathUsed: "per-doc",
+              },
+            },
           },
         },
         totals: {
+          entityCount: 1,
           orgCount: 1,
           titleCount: 2,
           contentOrgCount: 1,

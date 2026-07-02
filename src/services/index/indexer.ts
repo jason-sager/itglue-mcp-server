@@ -1,35 +1,25 @@
 import type { ITGlueClient } from "../itglue-client.js";
-import type {
-  ITGlueDocument,
-  ITGlueDocumentSection,
-  ITGlueOrganization,
-} from "../../types.js";
+import type { ITGlueOrganization } from "../../types.js";
 import type {
   BuildReport,
-  ContentDocEntry,
   ContentPath,
   ContentShard,
+  EntityManifest,
   IndexCapabilities,
   IndexManifest,
   OrgManifestEntry,
   TitleEntry,
 } from "./types.js";
 import { IndexStore } from "./store.js";
-import { probeCapabilities } from "./capabilities.js";
-import { normalizeToTerms } from "./normalize.js";
-import { mapWithConcurrency } from "../concurrency.js";
+import type { IndexStrategy, OrgRef } from "./strategy.js";
 import {
+  DEFAULT_ENTITY_TYPE,
   INDEX_CONCURRENCY,
   INDEX_SCHEMA_VERSION,
-  MAX_PAGE_SIZE,
 } from "../../constants.js";
 
-interface OrgRef {
-  id: string;
-  name: string;
-}
-
 export interface BuildParams {
+  entityType?: string;
   mode: "full" | "incremental";
   organizationId?: string;
   includeContent: boolean;
@@ -37,17 +27,8 @@ export interface BuildParams {
 
 export interface IndexerOptions {
   baseUrl: string;
+  strategies: IndexStrategy[];
   concurrency?: number;
-}
-
-const TITLE_FIELDS = "name,organization-id,organization-name,updated-at,published";
-
-function orgDocsPath(orgId: string): string {
-  return `/organizations/${orgId}/relationships/documents`;
-}
-
-function sectionsPath(docId: string): string {
-  return `/documents/${docId}/relationships/sections`;
 }
 
 function hostOf(baseUrl: string): string {
@@ -59,11 +40,14 @@ function hostOf(baseUrl: string): string {
 }
 
 /**
- * Builds and maintains the on-disk document search index. The titles tier is
- * cheap and swept across all orgs; the content tier is opt-in and per-org.
+ * Builds and maintains the on-disk search index across entity types. The
+ * entity-agnostic orchestration lives here (titles diff, incremental refresh,
+ * manifest); per-entity behavior (how to sweep titles, probe capabilities, and
+ * gather content) is delegated to an IndexStrategy.
  */
-export class DocumentIndexer {
+export class EntityIndexer {
   private readonly concurrency: number;
+  private readonly strategies: Map<string, IndexStrategy>;
 
   constructor(
     private readonly client: ITGlueClient,
@@ -71,9 +55,22 @@ export class DocumentIndexer {
     private readonly options: IndexerOptions
   ) {
     this.concurrency = options.concurrency ?? INDEX_CONCURRENCY;
+    this.strategies = new Map(
+      options.strategies.map((s) => [s.entityType, s])
+    );
   }
 
   async build(params: BuildParams): Promise<BuildReport> {
+    const entityType = params.entityType ?? DEFAULT_ENTITY_TYPE;
+    const strategy = this.strategies.get(entityType);
+    if (!strategy) {
+      throw new Error(
+        `Unknown entity type "${entityType}". Known types: ${[
+          ...this.strategies.keys(),
+        ].join(", ")}.`
+      );
+    }
+
     if (params.includeContent && !params.organizationId) {
       throw new Error(
         "Content indexing requires an organization_id (index one organization at a time)."
@@ -83,25 +80,35 @@ export class DocumentIndexer {
     const startedAt = Date.now();
     const callsBefore = this.client.requestCount;
 
+    const priorSchema = await this.store.priorSchemaVersion();
+    const schemaRebuilt =
+      priorSchema !== null && priorSchema !== INDEX_SCHEMA_VERSION;
+
     const orgs = params.organizationId
       ? [await this.resolveOrg(params.organizationId)]
       : await this.listAllOrgs();
 
+    // Capabilities are per-entity; reuse the prior probe unless this is a full
+    // build (or none is cached), and only if the strategy probes at all.
     const prevManifest = await this.store.readManifest();
     let capabilities: IndexCapabilities | null =
-      prevManifest?.capabilities ?? null;
-    if ((params.mode === "full" || !capabilities) && orgs.length > 0) {
-      capabilities = await probeCapabilities(this.client, orgs[0].id);
+      prevManifest?.entities[entityType]?.capabilities ?? null;
+    if (
+      strategy.probeCapabilities &&
+      (params.mode === "full" || !capabilities) &&
+      orgs.length > 0
+    ) {
+      capabilities = await strategy.probeCapabilities(this.client, orgs[0].id);
     }
 
     // ── Titles ──────────────────────────────────────────────────
-    const prevTitles = await this.store.readTitles();
+    const prevTitles = await this.store.readTitles(entityType);
     const prevEntries = prevTitles?.entries ?? [];
     const scopeOrgIds = new Set(orgs.map((o) => o.id));
 
     const freshByOrg = new Map<string, TitleEntry[]>();
     for (const org of orgs) {
-      freshByOrg.set(org.id, await this.sweepOrgTitles(org));
+      freshByOrg.set(org.id, await strategy.sweepOrgTitles(this.client, org));
     }
 
     const diff = diffTitles(prevEntries, freshByOrg, scopeOrgIds);
@@ -117,6 +124,7 @@ export class DocumentIndexer {
     const now = new Date().toISOString();
     await this.store.writeTitles({
       schemaVersion: INDEX_SCHEMA_VERSION,
+      entity_type: entityType,
       builtAt: now,
       host: hostOf(this.options.baseUrl),
       entries: merged,
@@ -129,7 +137,7 @@ export class DocumentIndexer {
     if (params.includeContent) {
       const org = orgs[0];
       const fresh = freshByOrg.get(org.id) ?? [];
-      const result = await this.buildOrgContent(org, fresh, {
+      const result = await this.buildOrgContent(strategy, org, fresh, {
         mode: params.mode,
         capabilities,
         added: diff.addedByOrg.get(org.id) ?? new Set(),
@@ -140,18 +148,19 @@ export class DocumentIndexer {
       contentDocsIndexed = result.docsIndexed;
       contentPath = result.path;
     } else if (params.mode === "incremental") {
-      // Even without content, keep content shards free of deleted docs.
+      // Even without content, keep content shards free of deleted records.
       for (const org of orgs) {
         const deleted = diff.deletedByOrg.get(org.id);
         if (deleted && deleted.size > 0) {
-          await this.pruneContentShard(org.id, deleted, now);
+          await this.pruneContentShard(entityType, org.id, deleted, now);
         }
       }
     }
 
-    const manifest = await this.rebuildManifest(now, capabilities);
+    const manifest = await this.rebuildManifest(now, entityType, capabilities);
 
     return {
+      entityType,
       mode: params.mode,
       organizationId: params.organizationId ?? null,
       includeContent: params.includeContent,
@@ -166,6 +175,7 @@ export class DocumentIndexer {
       durationMs: Date.now() - startedAt,
       cacheBytes: manifest.totals.bytesOnDisk,
       cachePath: this.store.root,
+      schemaRebuilt,
       capabilities,
     };
   }
@@ -184,43 +194,10 @@ export class DocumentIndexer {
     return orgs.map((o) => ({ id: String(o.id), name: o.name ?? String(o.id) }));
   }
 
-  // ── Titles sweep ──────────────────────────────────────────────
-
-  private async sweepOrgTitles(org: OrgRef): Promise<TitleEntry[]> {
-    // Always request sparse fields — harmless if the API ignores them.
-    const base: Record<string, string | number> = {
-      "fields[documents]": TITLE_FIELDS,
-    };
-    const path = orgDocsPath(org.id);
-
-    const [root, folder] = await Promise.all([
-      this.client.getAll<ITGlueDocument>(path, base),
-      this.client.getAll<ITGlueDocument>(path, {
-        ...base,
-        "filter[document-folder-id][ne]": "null",
-      }),
-    ]);
-
-    const seen = new Set<string>();
-    const entries: TitleEntry[] = [];
-    for (const doc of [...root, ...folder]) {
-      if (seen.has(doc.id)) continue;
-      seen.add(doc.id);
-      entries.push({
-        id: doc.id,
-        name: doc.name ?? "",
-        org_id: org.id,
-        org_name: org.name,
-        updated_at: doc.updated_at ?? "",
-        published: Boolean(doc.published),
-      });
-    }
-    return entries;
-  }
-
   // ── Content build ─────────────────────────────────────────────
 
   private async buildOrgContent(
+    strategy: IndexStrategy,
     org: OrgRef,
     freshTitles: TitleEntry[],
     ctx: {
@@ -232,26 +209,36 @@ export class DocumentIndexer {
       now: string;
     }
   ): Promise<{ docsIndexed: number; path: ContentPath }> {
-    let entries: ContentDocEntry[];
+    const entityType = strategy.entityType;
+    const strategyCtx = { concurrency: this.concurrency };
+    let entries;
     let path: ContentPath;
 
     if (ctx.mode === "full") {
-      const fetched = await this.fetchContent(org.id, freshTitles, ctx.capabilities);
+      const fetched = await strategy.fetchContent(
+        this.client,
+        org.id,
+        freshTitles,
+        ctx.capabilities,
+        strategyCtx
+      );
       entries = fetched.entries;
       path = fetched.path;
     } else {
       // Incremental: keep unchanged entries, refetch added+changed, drop deleted.
-      const prev = await this.store.readContentShard(org.id);
+      const prev = await this.store.readContentShard(entityType, org.id);
       const prevEntries = prev?.entries ?? [];
       const toRefetchIds = new Set([...ctx.added, ...ctx.changed]);
       const kept = prevEntries.filter(
         (e) => !toRefetchIds.has(e.id) && !ctx.deleted.has(e.id)
       );
       const refetchTitles = freshTitles.filter((t) => toRefetchIds.has(t.id));
-      const fetched = await this.fetchContent(
+      const fetched = await strategy.fetchContent(
+        this.client,
         org.id,
         refetchTitles,
-        ctx.capabilities
+        ctx.capabilities,
+        strategyCtx
       );
       entries = [...kept, ...fetched.entries];
       path = fetched.path;
@@ -260,6 +247,7 @@ export class DocumentIndexer {
     entries.sort((a, b) => a.id.localeCompare(b.id));
     const shard: ContentShard = {
       schemaVersion: INDEX_SCHEMA_VERSION,
+      entity_type: entityType,
       org_id: org.id,
       org_name: org.name,
       builtAt: ctx.now,
@@ -271,126 +259,17 @@ export class DocumentIndexer {
     return { docsIndexed: entries.length, path };
   }
 
-  /** Fetch + normalize content for a set of documents. Bulk if supported, else per-doc. */
-  private async fetchContent(
-    orgId: string,
-    titles: TitleEntry[],
-    capabilities: IndexCapabilities | null
-  ): Promise<{ entries: ContentDocEntry[]; path: ContentPath }> {
-    if (titles.length === 0) return { entries: [], path: "per-doc" };
-
-    if (capabilities?.sideloadSections) {
-      const bulk = await this.fetchContentBulk(orgId, titles);
-      if (bulk) return { entries: bulk, path: "bulk-sideload" };
-      // Fall through to per-doc if the bulk path could not attribute sections.
-    }
-
-    const updatedById = new Map(titles.map((t) => [t.id, t.updated_at]));
-    const entries = await mapWithConcurrency(
-      titles,
-      this.concurrency,
-      async (title) => {
-        const terms = await this.fetchDocTerms(title.id);
-        return {
-          id: title.id,
-          updated_at: updatedById.get(title.id) ?? "",
-          terms,
-        } satisfies ContentDocEntry;
-      }
-    );
-    return { entries, path: "per-doc" };
-  }
-
-  private async fetchDocTerms(docId: string): Promise<string[]> {
-    const sections = await this.client.getMany<ITGlueDocumentSection>(
-      sectionsPath(docId),
-      { "page[size]": MAX_PAGE_SIZE }
-    );
-    return normalizeToTerms(joinSectionContent(sections.data));
-  }
-
-  /**
-   * Bulk content via `include=sections`. Returns null (triggering per-doc
-   * fallback) if the sideload did not actually attribute sections to documents.
-   */
-  private async fetchContentBulk(
-    orgId: string,
-    titles: TitleEntry[]
-  ): Promise<ContentDocEntry[] | null> {
-    const wanted = new Set(titles.map((t) => t.id));
-    const updatedById = new Map(titles.map((t) => [t.id, t.updated_at]));
-    const sectionsByDoc = new Map<string, ITGlueDocumentSection[]>();
-    let sawAnySection = false;
-
-    let pageNumber = 1;
-    for (let page = 0; page < 1000; page++) {
-      const res = await this.client.getManyRaw<ITGlueDocument>(
-        orgDocsPath(orgId),
-        {
-          "page[number]": pageNumber,
-          "page[size]": MAX_PAGE_SIZE,
-          include: "sections",
-        }
-      );
-      for (const raw of res.included) {
-        const section = raw as ITGlueDocumentSection;
-        const docId = section.document_id != null ? String(section.document_id) : null;
-        if (!docId) continue;
-        sawAnySection = true;
-        const list = sectionsByDoc.get(docId) ?? [];
-        list.push(section);
-        sectionsByDoc.set(docId, list);
-      }
-      if (res.data.length === 0 || !res.has_more || res.next_page === null) break;
-      if (res.next_page <= pageNumber) break;
-      pageNumber = res.next_page;
-    }
-
-    if (!sawAnySection) return null;
-
-    const entries: ContentDocEntry[] = [];
-    const missing: TitleEntry[] = [];
-    for (const title of titles) {
-      const sections = sectionsByDoc.get(title.id);
-      if (!sections) {
-        missing.push(title);
-        continue;
-      }
-      entries.push({
-        id: title.id,
-        updated_at: updatedById.get(title.id) ?? "",
-        terms: normalizeToTerms(joinSectionContent(sections)),
-      });
-    }
-
-    // Per-doc fallback for documents whose sections did not sideload.
-    if (missing.length > 0) {
-      const fallback = await mapWithConcurrency(
-        missing,
-        this.concurrency,
-        async (title) => ({
-          id: title.id,
-          updated_at: updatedById.get(title.id) ?? "",
-          terms: await this.fetchDocTerms(title.id),
-        })
-      );
-      entries.push(...fallback);
-    }
-
-    // Ignore sideloaded sections for docs not in `wanted`.
-    return entries.filter((e) => wanted.has(e.id));
-  }
-
   private async pruneContentShard(
+    entityType: string,
     orgId: string,
     deleted: Set<string>,
     now: string
   ): Promise<void> {
-    const shard = await this.store.readContentShard(orgId);
+    const shard = await this.store.readContentShard(entityType, orgId);
     if (!shard) return;
     const entries = shard.entries.filter((e) => !deleted.has(e.id));
     if (entries.length === 0) {
-      await this.store.deleteContentShard(orgId);
+      await this.store.deleteContentShard(entityType, orgId);
       return;
     }
     await this.store.writeContentShard({
@@ -405,66 +284,99 @@ export class DocumentIndexer {
 
   private async rebuildManifest(
     now: string,
-    capabilities: IndexCapabilities | null
+    currentEntity: string,
+    currentCapabilities: IndexCapabilities | null
   ): Promise<IndexManifest> {
     const prev = await this.store.readManifest();
-    const titles = await this.store.readTitles();
-    const titlesEntries = titles?.entries ?? [];
-    const titlesBytes = await this.store.titlesSize();
+    const shardsOnDisk = await this.store.listContentShards();
 
-    // Per-org title counts.
-    const titleCountByOrg = new Map<string, { count: number; name: string }>();
-    for (const e of titlesEntries) {
-      const cur = titleCountByOrg.get(e.org_id);
-      if (cur) cur.count++;
-      else titleCountByOrg.set(e.org_id, { count: 1, name: e.org_name });
-    }
-
-    const contentOrgIds = new Set(await this.store.listContentOrgIds());
-    const orgs: Record<string, OrgManifestEntry> = {};
-
-    const allOrgIds = new Set<string>([
-      ...titleCountByOrg.keys(),
-      ...contentOrgIds,
-    ]);
-
+    const entities: Record<string, EntityManifest> = {};
+    const orgIdUnion = new Set<string>();
+    let titleCount = 0;
     let contentOrgCount = 0;
     let contentDocCount = 0;
-    let contentBytes = 0;
+    let bytesOnDisk = 0;
 
-    for (const orgId of allOrgIds) {
-      const prevEntry = prev?.orgs[orgId];
-      const titleInfo = titleCountByOrg.get(orgId);
-      let contentIndexed = false;
-      let contentDocs = 0;
-      let contentSize = 0;
-      let lastContentAt: string | null = prevEntry?.lastContentAt ?? null;
-      let lastPathUsed = prevEntry?.lastPathUsed ?? null;
+    for (const entityType of this.strategies.keys()) {
+      const titles = await this.store.readTitles(entityType);
+      const titlesEntries = titles?.entries ?? [];
+      const contentShardOrgs = new Set(
+        shardsOnDisk
+          .filter((s) => s.entity_type === entityType)
+          .map((s) => s.org_id)
+      );
 
-      if (contentOrgIds.has(orgId)) {
-        const shard = await this.store.readContentShard(orgId);
-        if (shard) {
-          contentIndexed = true;
-          contentDocs = shard.docCount;
-          contentSize = await this.store.contentShardSize(orgId);
-          lastContentAt = shard.builtAt;
-          lastPathUsed = shard.path ?? lastPathUsed;
-          contentOrgCount++;
-          contentDocCount += contentDocs;
-          contentBytes += contentSize;
-        }
+      // Skip entity types with nothing indexed yet, so the manifest reflects
+      // only what actually exists on disk.
+      if (titlesEntries.length === 0 && contentShardOrgs.size === 0) continue;
+
+      const titlesBytes = await this.store.titlesSize(entityType);
+      titleCount += titlesEntries.length;
+      bytesOnDisk += titlesBytes;
+
+      const titleCountByOrg = new Map<string, { count: number; name: string }>();
+      for (const e of titlesEntries) {
+        const cur = titleCountByOrg.get(e.org_id);
+        if (cur) cur.count++;
+        else titleCountByOrg.set(e.org_id, { count: 1, name: e.org_name });
       }
 
-      orgs[orgId] = {
-        org_id: orgId,
-        org_name: titleInfo?.name ?? prevEntry?.org_name ?? orgId,
-        titlesCount: titleInfo?.count ?? 0,
-        contentIndexed,
-        contentDocCount: contentDocs,
-        contentBytesOnDisk: contentSize,
-        lastTitlesAt: titleInfo ? now : prevEntry?.lastTitlesAt ?? null,
-        lastContentAt,
-        lastPathUsed,
+      const prevEnt = prev?.entities[entityType];
+      const allOrgIds = new Set<string>([
+        ...titleCountByOrg.keys(),
+        ...contentShardOrgs,
+      ]);
+      const orgs: Record<string, OrgManifestEntry> = {};
+
+      for (const orgId of allOrgIds) {
+        orgIdUnion.add(orgId);
+        const prevEntry = prevEnt?.orgs[orgId];
+        const titleInfo = titleCountByOrg.get(orgId);
+        let contentIndexed = false;
+        let contentDocs = 0;
+        let contentSize = 0;
+        let lastContentAt: string | null = prevEntry?.lastContentAt ?? null;
+        let lastPathUsed = prevEntry?.lastPathUsed ?? null;
+
+        if (contentShardOrgs.has(orgId)) {
+          const shard = await this.store.readContentShard(entityType, orgId);
+          if (shard) {
+            contentIndexed = true;
+            contentDocs = shard.docCount;
+            contentSize = await this.store.contentShardSize(entityType, orgId);
+            lastContentAt = shard.builtAt;
+            lastPathUsed = shard.path ?? lastPathUsed;
+            contentOrgCount++;
+            contentDocCount += contentDocs;
+            bytesOnDisk += contentSize;
+          }
+        }
+
+        orgs[orgId] = {
+          org_id: orgId,
+          org_name: titleInfo?.name ?? prevEntry?.org_name ?? orgId,
+          titlesCount: titleInfo?.count ?? 0,
+          contentIndexed,
+          contentDocCount: contentDocs,
+          contentBytesOnDisk: contentSize,
+          lastTitlesAt: titleInfo ? now : prevEntry?.lastTitlesAt ?? null,
+          lastContentAt,
+          lastPathUsed,
+        };
+      }
+
+      entities[entityType] = {
+        entity_type: entityType,
+        capabilities:
+          entityType === currentEntity
+            ? currentCapabilities
+            : prevEnt?.capabilities ?? null,
+        titles: {
+          count: titlesEntries.length,
+          builtAt: titles?.builtAt ?? null,
+          bytesOnDisk: titlesBytes,
+        },
+        orgs,
       };
     }
 
@@ -473,19 +385,14 @@ export class DocumentIndexer {
       host: hostOf(this.options.baseUrl),
       createdAt: prev?.createdAt ?? now,
       updatedAt: now,
-      capabilities,
-      titles: {
-        count: titlesEntries.length,
-        builtAt: titles?.builtAt ?? null,
-        bytesOnDisk: titlesBytes,
-      },
-      orgs,
+      entities,
       totals: {
-        orgCount: allOrgIds.size,
-        titleCount: titlesEntries.length,
+        entityCount: Object.keys(entities).length,
+        orgCount: orgIdUnion.size,
+        titleCount,
         contentOrgCount,
         contentDocCount,
-        bytesOnDisk: titlesBytes + contentBytes,
+        bytesOnDisk,
       },
     };
 
@@ -495,13 +402,6 @@ export class DocumentIndexer {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
-
-function joinSectionContent(sections: ITGlueDocumentSection[]): string {
-  return [...sections]
-    .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
-    .map((s) => s.content ?? "")
-    .join("\n");
-}
 
 interface TitlesDiff {
   addedByOrg: Map<string, Set<string>>;

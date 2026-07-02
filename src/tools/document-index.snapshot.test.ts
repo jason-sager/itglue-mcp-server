@@ -49,6 +49,7 @@ describe("document-index tool snapshots", () => {
 
   // ── Fixed fixtures ────────────────────────────────────────────────
   const fullReport: BuildReport = {
+    entityType: "documents",
     mode: "full",
     organizationId: "123",
     includeContent: true,
@@ -63,6 +64,7 @@ describe("document-index tool snapshots", () => {
     durationMs: 12345,
     cacheBytes: 2_500_000,
     cachePath: "/home/user/.cache/itglue/api.itglue.com",
+    schemaRebuilt: false,
     capabilities: {
       sideloadSections: true,
       globalDocumentsSweep: false,
@@ -77,6 +79,7 @@ describe("document-index tool snapshots", () => {
       {
         id: "1001",
         name: "VPN Runbook",
+        entity_type: "documents",
         org_id: "123",
         org_name: "Acme Corp",
         updated_at: "2026-05-01T12:00:00.000Z",
@@ -89,6 +92,7 @@ describe("document-index tool snapshots", () => {
       {
         id: "1002",
         name: "Firewall Policy",
+        entity_type: "documents",
         org_id: "456",
         org_name: "Globex",
         updated_at: "2026-04-15T08:30:00.000Z",
@@ -105,55 +109,84 @@ describe("document-index tool snapshots", () => {
     has_more: true,
     titles_built_at: "2026-06-01T00:00:00.000Z",
     searched_content: true,
+    searched_entities: ["documents"],
     content_orgs_missing: ["456"],
   };
 
   const manifest: IndexManifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     host: "/home/user/.cache/itglue/api.itglue.com",
     createdAt: "2026-05-01T00:00:00.000Z",
     updatedAt: "2026-06-01T00:00:00.000Z",
-    capabilities: {
-      sideloadSections: true,
-      globalDocumentsSweep: false,
-      sparseFieldsets: true,
-      probedAt: "2026-06-01T00:00:00.000Z",
-    },
-    titles: {
-      count: 42,
-      builtAt: "2026-06-01T00:00:00.000Z",
-      bytesOnDisk: 100_000,
-    },
-    orgs: {
-      "123": {
-        org_id: "123",
-        org_name: "Acme Corp",
-        titlesCount: 30,
-        contentIndexed: true,
-        contentDocCount: 30,
-        contentBytesOnDisk: 2_400_000,
-        lastTitlesAt: "2026-06-01T00:00:00.000Z",
-        lastContentAt: "2026-06-01T00:00:00.000Z",
-        lastPathUsed: "per-doc",
+    entities: {
+      documents: {
+        entity_type: "documents",
+        capabilities: {
+          sideloadSections: true,
+          globalDocumentsSweep: false,
+          sparseFieldsets: true,
+          probedAt: "2026-06-01T00:00:00.000Z",
+        },
+        titles: {
+          count: 42,
+          builtAt: "2026-06-01T00:00:00.000Z",
+          bytesOnDisk: 100_000,
+        },
+        orgs: {
+          "123": {
+            org_id: "123",
+            org_name: "Acme Corp",
+            titlesCount: 30,
+            contentIndexed: true,
+            contentDocCount: 30,
+            contentBytesOnDisk: 2_400_000,
+            lastTitlesAt: "2026-06-01T00:00:00.000Z",
+            lastContentAt: "2026-06-01T00:00:00.000Z",
+            lastPathUsed: "per-doc",
+          },
+          "456": {
+            org_id: "456",
+            org_name: "Globex",
+            titlesCount: 12,
+            contentIndexed: false,
+            contentDocCount: 0,
+            contentBytesOnDisk: 0,
+            lastTitlesAt: "2026-06-01T00:00:00.000Z",
+            lastContentAt: null,
+            lastPathUsed: null,
+          },
+        },
       },
-      "456": {
-        org_id: "456",
-        org_name: "Globex",
-        titlesCount: 12,
-        contentIndexed: false,
-        contentDocCount: 0,
-        contentBytesOnDisk: 0,
-        lastTitlesAt: "2026-06-01T00:00:00.000Z",
-        lastContentAt: null,
-        lastPathUsed: null,
+      configurations: {
+        entity_type: "configurations",
+        capabilities: null,
+        titles: {
+          count: 15,
+          builtAt: "2026-06-01T00:00:00.000Z",
+          bytesOnDisk: 40_000,
+        },
+        orgs: {
+          "123": {
+            org_id: "123",
+            org_name: "Acme Corp",
+            titlesCount: 15,
+            contentIndexed: true,
+            contentDocCount: 15,
+            contentBytesOnDisk: 60_000,
+            lastTitlesAt: "2026-06-01T00:00:00.000Z",
+            lastContentAt: "2026-06-01T00:00:00.000Z",
+            lastPathUsed: "list-record",
+          },
+        },
       },
     },
     totals: {
+      entityCount: 2,
       orgCount: 2,
-      titleCount: 42,
-      contentOrgCount: 1,
-      contentDocCount: 30,
-      bytesOnDisk: 2_500_000,
+      titleCount: 57,
+      contentOrgCount: 2,
+      contentDocCount: 45,
+      bytesOnDisk: 2_560_000,
     },
   };
 
@@ -170,11 +203,12 @@ describe("document-index tool snapshots", () => {
       expect(res.content[0].text).toMatchInlineSnapshot(`
         "# Index Build Complete
 
+        - **Entity**: documents
         - **Mode**: full
         - **Scope**: organization 123
         - **Organizations processed**: 1
         - **Titles indexed**: 42
-        - **Content documents indexed**: 42 (path: per-doc)
+        - **Content records indexed**: 42 (path: per-doc)
         - **API calls**: 45
         - **Duration**: 12.3s
         - **Cache size**: 2.4 MB
@@ -193,6 +227,7 @@ describe("document-index tool snapshots", () => {
       });
       expect(res.content[0].text).toMatchInlineSnapshot(`
         "{
+          "entityType": "documents",
           "mode": "full",
           "organizationId": "123",
           "includeContent": true,
@@ -207,6 +242,7 @@ describe("document-index tool snapshots", () => {
           "durationMs": 12345,
           "cacheBytes": 2500000,
           "cachePath": "/home/user/.cache/itglue/api.itglue.com",
+          "schemaRebuilt": false,
           "capabilities": {
             "sideloadSections": true,
             "globalDocumentsSweep": false,
@@ -217,8 +253,9 @@ describe("document-index tool snapshots", () => {
       `);
     });
 
-    it("markdown: incremental titles-only build (no content, no capabilities)", async () => {
+    it("markdown: incremental titles-only build (no content, no capabilities, schema rebuilt)", async () => {
       const incremental: BuildReport = {
+        entityType: "documents",
         mode: "incremental",
         organizationId: null,
         includeContent: false,
@@ -233,6 +270,7 @@ describe("document-index tool snapshots", () => {
         durationMs: 3400,
         cacheBytes: 512,
         cachePath: "/home/user/.cache/itglue/api.itglue.com",
+        schemaRebuilt: true,
         capabilities: null,
       };
       indexer.build.mockResolvedValue(incremental);
@@ -244,6 +282,7 @@ describe("document-index tool snapshots", () => {
       expect(res.content[0].text).toMatchInlineSnapshot(`
         "# Index Update Complete
 
+        - **Entity**: documents
         - **Mode**: incremental
         - **Scope**: all organizations (titles)
         - **Organizations processed**: 8
@@ -252,7 +291,8 @@ describe("document-index tool snapshots", () => {
         - **API calls**: 9
         - **Duration**: 3.4s
         - **Cache size**: 512 B
-        - **Cache path**: /home/user/.cache/itglue/api.itglue.com"
+        - **Cache path**: /home/user/.cache/itglue/api.itglue.com
+        - **Schema**: rebuilt for a new cache version (the previous cache was discarded and is being repopulated)."
       `);
     });
 
@@ -286,6 +326,7 @@ describe("document-index tool snapshots", () => {
         "# Search Results for "vpn firewall" (5 total)
 
         ## VPN Runbook (ID: 1001)
+        - **Type**: documents
         - **Organization**: Acme Corp (ID: 123)
         - **Score**: 7
         - **Title matches**: vpn
@@ -293,6 +334,7 @@ describe("document-index tool snapshots", () => {
         - **Updated**: 2026-05-01T12:00:00.000Z
 
         ## Firewall Policy (ID: 1002)
+        - **Type**: documents
         - **Organization**: Globex (ID: 456)
         - **Score**: 3
         - **Title matches**: firewall
@@ -326,6 +368,7 @@ describe("document-index tool snapshots", () => {
             {
               "id": "1001",
               "name": "VPN Runbook",
+              "entity_type": "documents",
               "org_id": "123",
               "org_name": "Acme Corp",
               "updated_at": "2026-05-01T12:00:00.000Z",
@@ -343,6 +386,7 @@ describe("document-index tool snapshots", () => {
             {
               "id": "1002",
               "name": "Firewall Policy",
+              "entity_type": "documents",
               "org_id": "456",
               "org_name": "Globex",
               "updated_at": "2026-04-15T08:30:00.000Z",
@@ -361,6 +405,9 @@ describe("document-index tool snapshots", () => {
           "has_more": true,
           "titles_built_at": "2026-06-01T00:00:00.000Z",
           "searched_content": true,
+          "searched_entities": [
+            "documents"
+          ],
           "content_orgs_missing": [
             "456"
           ]
@@ -380,6 +427,7 @@ describe("document-index tool snapshots", () => {
           has_more: false,
           titles_built_at: "2026-06-01T00:00:00.000Z",
           searched_content: false,
+          searched_entities: ["documents"],
           content_orgs_missing: [],
         } satisfies SearchResponse,
       });
@@ -390,7 +438,7 @@ describe("document-index tool snapshots", () => {
         page_size: 50,
         response_format: "markdown",
       });
-      expect(res.content[0].text).toMatchInlineSnapshot(`"No documents matched "nonexistent"."`);
+      expect(res.content[0].text).toMatchInlineSnapshot(`"No results matched "nonexistent"."`);
     });
 
     it("guidance: no index built yet (non-ok status)", async () => {
@@ -434,14 +482,21 @@ describe("document-index tool snapshots", () => {
         "# ITGlue Search Index Status
 
         - **Cache path**: /home/user/.cache/itglue/api.itglue.com
-        - **Titles**: 42 documents across 2 organizations (built 2026-06-01T00:00:00.000Z)
-        - **Content-indexed organizations**: 1 (30 documents)
+        - **Entities indexed**: 2 (configurations, documents)
+        - **Titles**: 57 records across 2 organizations
+        - **Content-indexed organizations**: 2 (45 records)
         - **Total cache size**: 2.4 MB
+
+        ## configurations
+        - **Titles**: 15 (built 2026-06-01T00:00:00.000Z)
+
+        - **Acme Corp** (ID: 123) — 15 titles; content: 15 records, 58.6 KB (list-record)
+
+        ## documents
+        - **Titles**: 42 (built 2026-06-01T00:00:00.000Z)
         - **API capabilities**: sideload=true, sparse=true, global-sweep=false
 
-        ## Organizations
-
-        - **Acme Corp** (ID: 123) — 30 titles; content: 30 docs, 2.3 MB (per-doc)
+        - **Acme Corp** (ID: 123) — 30 titles; content: 30 records, 2.3 MB (per-doc)
         - **Globex** (ID: 456) — 12 titles; content: not indexed"
       `);
     });
@@ -453,51 +508,79 @@ describe("document-index tool snapshots", () => {
       });
       expect(res.content[0].text).toMatchInlineSnapshot(`
         "{
-          "schemaVersion": 1,
+          "schemaVersion": 2,
           "host": "/home/user/.cache/itglue/api.itglue.com",
           "createdAt": "2026-05-01T00:00:00.000Z",
           "updatedAt": "2026-06-01T00:00:00.000Z",
-          "capabilities": {
-            "sideloadSections": true,
-            "globalDocumentsSweep": false,
-            "sparseFieldsets": true,
-            "probedAt": "2026-06-01T00:00:00.000Z"
-          },
-          "titles": {
-            "count": 42,
-            "builtAt": "2026-06-01T00:00:00.000Z",
-            "bytesOnDisk": 100000
-          },
-          "orgs": {
-            "123": {
-              "org_id": "123",
-              "org_name": "Acme Corp",
-              "titlesCount": 30,
-              "contentIndexed": true,
-              "contentDocCount": 30,
-              "contentBytesOnDisk": 2400000,
-              "lastTitlesAt": "2026-06-01T00:00:00.000Z",
-              "lastContentAt": "2026-06-01T00:00:00.000Z",
-              "lastPathUsed": "per-doc"
+          "entities": {
+            "documents": {
+              "entity_type": "documents",
+              "capabilities": {
+                "sideloadSections": true,
+                "globalDocumentsSweep": false,
+                "sparseFieldsets": true,
+                "probedAt": "2026-06-01T00:00:00.000Z"
+              },
+              "titles": {
+                "count": 42,
+                "builtAt": "2026-06-01T00:00:00.000Z",
+                "bytesOnDisk": 100000
+              },
+              "orgs": {
+                "123": {
+                  "org_id": "123",
+                  "org_name": "Acme Corp",
+                  "titlesCount": 30,
+                  "contentIndexed": true,
+                  "contentDocCount": 30,
+                  "contentBytesOnDisk": 2400000,
+                  "lastTitlesAt": "2026-06-01T00:00:00.000Z",
+                  "lastContentAt": "2026-06-01T00:00:00.000Z",
+                  "lastPathUsed": "per-doc"
+                },
+                "456": {
+                  "org_id": "456",
+                  "org_name": "Globex",
+                  "titlesCount": 12,
+                  "contentIndexed": false,
+                  "contentDocCount": 0,
+                  "contentBytesOnDisk": 0,
+                  "lastTitlesAt": "2026-06-01T00:00:00.000Z",
+                  "lastContentAt": null,
+                  "lastPathUsed": null
+                }
+              }
             },
-            "456": {
-              "org_id": "456",
-              "org_name": "Globex",
-              "titlesCount": 12,
-              "contentIndexed": false,
-              "contentDocCount": 0,
-              "contentBytesOnDisk": 0,
-              "lastTitlesAt": "2026-06-01T00:00:00.000Z",
-              "lastContentAt": null,
-              "lastPathUsed": null
+            "configurations": {
+              "entity_type": "configurations",
+              "capabilities": null,
+              "titles": {
+                "count": 15,
+                "builtAt": "2026-06-01T00:00:00.000Z",
+                "bytesOnDisk": 40000
+              },
+              "orgs": {
+                "123": {
+                  "org_id": "123",
+                  "org_name": "Acme Corp",
+                  "titlesCount": 15,
+                  "contentIndexed": true,
+                  "contentDocCount": 15,
+                  "contentBytesOnDisk": 60000,
+                  "lastTitlesAt": "2026-06-01T00:00:00.000Z",
+                  "lastContentAt": "2026-06-01T00:00:00.000Z",
+                  "lastPathUsed": "list-record"
+                }
+              }
             }
           },
           "totals": {
+            "entityCount": 2,
             "orgCount": 2,
-            "titleCount": 42,
-            "contentOrgCount": 1,
-            "contentDocCount": 30,
-            "bytesOnDisk": 2500000
+            "titleCount": 57,
+            "contentOrgCount": 2,
+            "contentDocCount": 45,
+            "bytesOnDisk": 2560000
           }
         }"
       `);
@@ -513,14 +596,21 @@ describe("document-index tool snapshots", () => {
         "# ITGlue Search Index Status
 
         - **Cache path**: /home/user/.cache/itglue/api.itglue.com
-        - **Titles**: 42 documents across 2 organizations (built 2026-06-01T00:00:00.000Z)
-        - **Content-indexed organizations**: 1 (30 documents)
+        - **Entities indexed**: 2 (configurations, documents)
+        - **Titles**: 57 records across 2 organizations
+        - **Content-indexed organizations**: 2 (45 records)
         - **Total cache size**: 2.4 MB
+
+        ## configurations
+        - **Titles**: 15 (built 2026-06-01T00:00:00.000Z)
+
+        - **Acme Corp** (ID: 123) — 15 titles; content: 15 records, 58.6 KB (list-record)
+
+        ## documents
+        - **Titles**: 42 (built 2026-06-01T00:00:00.000Z)
         - **API capabilities**: sideload=true, sparse=true, global-sweep=false
 
-        ## Organizations
-
-        - **Acme Corp** (ID: 123) — 30 titles; content: 30 docs, 2.3 MB (per-doc)"
+        - **Acme Corp** (ID: 123) — 30 titles; content: 30 records, 2.3 MB (per-doc)"
       `);
     });
 

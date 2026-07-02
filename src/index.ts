@@ -13,10 +13,12 @@ import { registerResourceTools } from "./tools/registry.js";
 import { registerDocumentTools } from "./tools/documents.js";
 import { registerDocumentSectionTools } from "./tools/document-sections.js";
 import { registerIndexTools } from "./tools/document-index.js";
-import { DocumentIndexer } from "./services/index/indexer.js";
-import { DocumentSearcher } from "./services/index/search.js";
+import { EntityIndexer } from "./services/index/indexer.js";
+import { EntitySearcher } from "./services/index/search.js";
 import { IndexStore } from "./services/index/store.js";
 import { buildIndexPaths, resolveCacheDir } from "./services/index/paths.js";
+import { documentStrategy } from "./services/index/strategies/document.js";
+import { configurationStrategy } from "./services/index/strategies/configuration.js";
 
 const VERSION = "1.1.0";
 const SERVER_NAME = "itglue-mcp-server";
@@ -190,10 +192,11 @@ function createServer(config: CliConfig): McpServer {
   const indexStore = new IndexStore(
     buildIndexPaths(config.cacheDir, config.baseUrl)
   );
-  const indexer = new DocumentIndexer(indexClient, indexStore, {
+  const indexer = new EntityIndexer(indexClient, indexStore, {
     baseUrl: config.baseUrl,
+    strategies: [documentStrategy, configurationStrategy],
   });
-  const searcher = new DocumentSearcher(indexStore);
+  const searcher = new EntitySearcher(indexStore);
 
   const server = new McpServer(
     {
@@ -205,15 +208,18 @@ function createServer(config: CliConfig): McpServer {
         "# ITGlue MCP Server — Tool Usage Guide",
         "",
         "## Searching and Filtering",
-        "- filter_name (on itglue_list_documents and itglue_list_organizations) performs a case-insensitive SUBSTRING match, applied client-side after retrieving the full list. It is safe for partial/approximate name lookups.",
+        "- filter_name (on itglue_list_documents, itglue_list_organizations, and itglue_list_configurations) performs a case-insensitive SUBSTRING match, applied client-side after retrieving the full list. It is safe for partial/approximate name lookups.",
         "- ID, type, and status filters are exact-match and applied server-side.",
         "- Because a name-filtered query fetches the entire list before matching, prefer an ID filter when you already know the exact ID.",
         "",
+        "## Configurations",
+        "- itglue_list_configurations and itglue_get_configuration read an organization's configurations (servers, firewalls, switches, workstations — with IPs, serials, etc.). Find the organization ID via itglue_list_organizations first.",
+        "",
         "## Fast Search via the Local Index",
-        "- itglue_search_documents does keyword search over a locally cached index and does NOT call the ITGlue API. Build the index first with itglue_index_documents.",
-        "- itglue_index_documents (mode 'full') with no organization_id sweeps document TITLES across all organizations (cheap). Pass organization_id + include_content: true to also index that org's body CONTENT (one org per call).",
-        "- Use mode 'incremental' to refresh cheaply (only changed documents are re-fetched). Use itglue_index_status to see what is cached and whether it is stale.",
-        "- To find a document by topic: prefer itglue_search_documents once indexed; use itglue_list_documents (with filter_name) for a live, un-indexed lookup within one organization.",
+        "- itglue_search_documents does keyword search over a locally cached index (documents AND configurations) and does NOT call the ITGlue API. Build the index first with itglue_index_documents. Pass entity_types to restrict (e.g. [\"configurations\"]).",
+        "- itglue_index_documents (mode 'full') with no organization_id sweeps TITLES across all organizations (cheap). Pass entity_type: 'configurations' to index configurations instead of documents. Pass organization_id + include_content: true to also index that org's body CONTENT (one org per call).",
+        "- Use mode 'incremental' to refresh cheaply (only changed records are re-fetched). Use itglue_index_status to see what is cached and whether it is stale.",
+        "- To find something by topic: prefer itglue_search_documents once indexed; use itglue_list_documents / itglue_list_configurations (with filter_name) for a live, un-indexed lookup within one organization.",
         "",
         "## Workflow: Reading Documents",
         "1. Use itglue_list_organizations to find the organization ID.",

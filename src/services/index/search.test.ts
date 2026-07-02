@@ -4,18 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { IndexStore } from "./store.js";
 import { buildIndexPaths } from "./paths.js";
-import { DocumentSearcher } from "./search.js";
+import { EntitySearcher } from "./search.js";
 import { INDEX_SCHEMA_VERSION } from "../../constants.js";
 import type { ContentDocEntry, TitleEntry } from "./types.js";
 
 let tmpDir: string;
 let store: IndexStore;
-let searcher: DocumentSearcher;
+let searcher: EntitySearcher;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "itglue-search-"));
   store = new IndexStore(buildIndexPaths(tmpDir, "https://api.itglue.com"));
-  searcher = new DocumentSearcher(store);
+  searcher = new EntitySearcher(store);
 });
 
 afterEach(async () => {
@@ -27,6 +27,7 @@ function title(over: Partial<TitleEntry> & { id: string; name: string }): TitleE
     org_id: "1",
     org_name: "Acme",
     updated_at: "2024-01-01",
+    entity_type: "documents",
     published: true,
     ...over,
   };
@@ -35,6 +36,7 @@ function title(over: Partial<TitleEntry> & { id: string; name: string }): TitleE
 async function seedTitles(entries: TitleEntry[]): Promise<void> {
   await store.writeTitles({
     schemaVersion: INDEX_SCHEMA_VERSION,
+    entity_type: "documents",
     builtAt: "2026-01-01T00:00:00.000Z",
     host: "api.itglue.com",
     entries,
@@ -47,6 +49,7 @@ async function seedContent(
 ): Promise<void> {
   await store.writeContentShard({
     schemaVersion: INDEX_SCHEMA_VERSION,
+    entity_type: "documents",
     org_id: orgId,
     org_name: "Acme",
     builtAt: "2026-01-01T00:00:00.000Z",
@@ -58,7 +61,7 @@ async function seedContent(
 
 const base = { searchContent: false, pageNumber: 1, pageSize: 20 };
 
-describe("DocumentSearcher", () => {
+describe("EntitySearcher", () => {
   it("reports no-index before anything is built", async () => {
     const out = await searcher.search({ query: "vpn", ...base });
     expect(out.status).toBe("no-index");

@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { IndexStore } from "./store.js";
 import { buildIndexPaths } from "./paths.js";
-import { DocumentIndexer, diffTitles } from "./indexer.js";
+import { EntityIndexer, diffTitles } from "./indexer.js";
+import { documentStrategy } from "./strategies/document.js";
 import { makeMockClient } from "../../test-helpers.js";
 import type { TitleEntry } from "./types.js";
 
@@ -63,8 +64,8 @@ function wireClient(
 describe("diffTitles", () => {
   const scope = new Set(["1"]);
   const prev: TitleEntry[] = [
-    { id: "a", name: "A", org_id: "1", org_name: "O", updated_at: "t1", published: true },
-    { id: "b", name: "B", org_id: "1", org_name: "O", updated_at: "t1", published: true },
+    { id: "a", name: "A", org_id: "1", org_name: "O", updated_at: "t1", entity_type: "documents", published: true },
+    { id: "b", name: "B", org_id: "1", org_name: "O", updated_at: "t1", entity_type: "documents", published: true },
   ];
 
   it("detects added, changed, and deleted within scope", () => {
@@ -72,9 +73,9 @@ describe("diffTitles", () => {
       [
         "1",
         [
-          { id: "a", name: "A", org_id: "1", org_name: "O", updated_at: "t1", published: true }, // unchanged
-          { id: "b", name: "B", org_id: "1", org_name: "O", updated_at: "t2", published: true }, // changed
-          { id: "c", name: "C", org_id: "1", org_name: "O", updated_at: "t1", published: true }, // added
+          { id: "a", name: "A", org_id: "1", org_name: "O", updated_at: "t1", entity_type: "documents", published: true }, // unchanged
+          { id: "b", name: "B", org_id: "1", org_name: "O", updated_at: "t2", entity_type: "documents", published: true }, // changed
+          { id: "c", name: "C", org_id: "1", org_name: "O", updated_at: "t1", entity_type: "documents", published: true }, // added
         ],
       ],
     ]);
@@ -110,8 +111,9 @@ describe("DocumentIndexer", () => {
   });
 
   function indexer() {
-    return new DocumentIndexer(client as never, store, {
+    return new EntityIndexer(client as never, store, {
       baseUrl: "https://api.itglue.com",
+      strategies: [documentStrategy],
     });
   }
 
@@ -139,10 +141,10 @@ describe("DocumentIndexer", () => {
     expect(report.contentDocsIndexed).toBe(2);
     expect(report.contentPath).toBe("per-doc");
 
-    const titles = await store.readTitles();
+    const titles = await store.readTitles("documents");
     expect(titles?.entries.map((e) => e.id).sort()).toEqual(["10", "11"]);
 
-    const shard = await store.readContentShard("1");
+    const shard = await store.readContentShard("documents", "1");
     const vpn = shard?.entries.find((e) => e.id === "10");
     expect(vpn?.terms).toContain("firewall");
     expect(vpn?.terms).toContain("vpn");
@@ -222,6 +224,6 @@ describe("DocumentIndexer", () => {
       String(c[0]).includes("/relationships/sections")
     );
     expect(sectionCalls).toHaveLength(0);
-    expect(await store.readContentShard("1")).toBeNull();
+    expect(await store.readContentShard("documents", "1")).toBeNull();
   });
 });

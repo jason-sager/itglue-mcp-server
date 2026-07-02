@@ -15,7 +15,12 @@ export const SECTION_TYPES = ["Text", "Heading", "Gallery", "Step"] as const;
 export type SectionType = (typeof SECTION_TYPES)[number];
 
 // ─── Document Search Index (fork-only content cache) ─────────────
-export const INDEX_SCHEMA_VERSION = 1;
+// v2: entity-aware index (documents + configurations + future resources).
+// The store returns null on a schema mismatch, so a v1 cache is ignored and
+// transparently rebuilt on the next index run.
+export const INDEX_SCHEMA_VERSION = 2;
+/** Default entity type when a caller does not specify one. */
+export const DEFAULT_ENTITY_TYPE = "documents";
 export const INDEX_DIR_NAME = "itglue-mcp-server";
 /** Max concurrent per-document section fetches during a content build. */
 export const INDEX_CONCURRENCY = 5;

@@ -43,12 +43,19 @@ export function hostSlug(baseUrl: string): string {
   return slug || "unknown";
 }
 
+/** Filesystem-safe segment for entity types / org ids used in filenames. */
+function safeSegment(value: string): string {
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 export interface IndexPaths {
   root: string;
   manifest: string;
-  titles: string;
   contentDir: string;
-  contentShard(orgId: string): string;
+  /** Per-entity titles file, e.g. titles-documents.json.gz. */
+  titles(entityType: string): string;
+  /** Per-entity, per-org content shard, e.g. content/documents-org-42.json.gz. */
+  contentShard(entityType: string, orgId: string): string;
 }
 
 /** Build the concrete on-disk paths for a resolved cache dir + API host. */
@@ -61,12 +68,13 @@ export function buildIndexPaths(
   return {
     root,
     manifest: path.join(root, "manifest.json.gz"),
-    titles: path.join(root, "titles.json.gz"),
     contentDir,
-    contentShard: (orgId: string) =>
+    titles: (entityType: string) =>
+      path.join(root, `titles-${safeSegment(entityType)}.json.gz`),
+    contentShard: (entityType: string, orgId: string) =>
       path.join(
         contentDir,
-        `org-${String(orgId).replace(/[^a-zA-Z0-9_-]/g, "_")}.json.gz`
+        `${safeSegment(entityType)}-org-${safeSegment(orgId)}.json.gz`
       ),
   };
 }

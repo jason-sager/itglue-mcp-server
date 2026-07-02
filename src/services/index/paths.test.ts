@@ -46,10 +46,14 @@ describe("buildIndexPaths", () => {
     expect(p.root).toBe(
       path.join(os.tmpdir(), "cache", "api_itglue_com")
     );
-    expect(p.titles.endsWith(`${path.sep}titles.json.gz`)).toBe(true);
+    expect(
+      p.titles("documents").endsWith(`${path.sep}titles-documents.json.gz`)
+    ).toBe(true);
     expect(p.manifest.endsWith(`${path.sep}manifest.json.gz`)).toBe(true);
     expect(
-      p.contentShard("42").endsWith(path.join("content", "org-42.json.gz"))
+      p
+        .contentShard("documents", "42")
+        .endsWith(path.join("content", "documents-org-42.json.gz"))
     ).toBe(true);
   });
 });

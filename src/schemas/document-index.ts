@@ -3,11 +3,17 @@ import { PaginationSchema, ResponseFormatSchema } from "./common.js";
 
 export const IndexDocumentsSchema = z
   .object({
+    entity_type: z
+      .enum(["documents", "configurations"])
+      .default("documents")
+      .describe(
+        "Which ITGlue entity type to index: 'documents' (default) or 'configurations'."
+      ),
     mode: z
       .enum(["full", "incremental"])
       .default("incremental")
       .describe(
-        "'full' rebuilds from scratch; 'incremental' re-sweeps titles and only re-fetches content for added/changed documents (much cheaper on repeat runs)."
+        "'full' rebuilds from scratch; 'incremental' re-sweeps titles and only re-fetches content for added/changed records (much cheaper on repeat runs)."
       ),
     organization_id: z
       .number()
@@ -45,7 +51,13 @@ export const SearchDocumentsSchema = z
       .boolean()
       .default(false)
       .describe(
-        "Also match indexed document body content. Requires that the organization's content has been indexed via itglue_index_documents."
+        "Also match indexed body content. Requires that the organization's content has been indexed via itglue_index_documents."
+      ),
+    entity_types: z
+      .array(z.enum(["documents", "configurations"]))
+      .optional()
+      .describe(
+        "Restrict the search to these entity types (e.g. [\"configurations\"]). Omit to search everything indexed."
       ),
     ...PaginationSchema,
     response_format: ResponseFormatSchema,
