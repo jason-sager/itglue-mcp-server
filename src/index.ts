@@ -20,7 +20,7 @@ import { buildIndexPaths, resolveCacheDir } from "./services/index/paths.js";
 import { documentStrategy } from "./services/index/strategies/document.js";
 import { configurationStrategy } from "./services/index/strategies/configuration.js";
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const SERVER_NAME = "itglue-mcp-server";
 
 interface CliConfig {

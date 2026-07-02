@@ -8,12 +8,12 @@ An unofficial [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) s
 
 ## Features
 
-- **16 tools** covering documents, document sections, organizations, and a local search index
+- **18 tools** covering documents, document sections, organizations, configurations, and a local search index
 - Full CRUD support for documents and document sections
 - Publish documents directly from your AI assistant
 - Organization lookup for finding org IDs
 - Pagination, filtering, and sorting support
-- **Local search index** for fast keyword search across all document titles and, per-organization, body content — stored compressed on disk
+- **Local, entity-aware search index** for fast keyword search across document and configuration titles and, per-organization, body content — stored compressed on disk
 - Markdown and JSON response formats
 - Regional API support (US, EU, Australia)
 - Stdio and streaming HTTP transports
@@ -119,6 +119,13 @@ Add `--region eu` or `--region au` to the args:
 | `itglue_list_organizations` | Search and list organizations with filtering and pagination |
 | `itglue_get_organization` | Get detailed information about a specific organization |
 
+### Configurations
+
+| Tool | Description |
+|------|-------------|
+| `itglue_list_configurations` | List/search an organization's configurations (servers, firewalls, switches, workstations) with filtering and pagination |
+| `itglue_get_configuration` | Get full details for a specific configuration (IPs, serial, notes, etc.) |
+
 ### Documents
 
 | Tool | Description |
@@ -150,25 +157,27 @@ Add `--region eu` or `--region au` to the args:
 
 ## Search & Filtering
 
-`filter_name` on `itglue_list_documents` and `itglue_list_organizations` performs a **case-insensitive substring match**. The ITGlue API cannot filter documents by name (and its organization name filter is exact-match only), so name filtering is applied **client-side**: the tool retrieves the full list for the scope and matches locally, then paginates. ID, type, and status filters are exact and applied server-side. When you already know the exact ID, prefer `filter_id` to avoid fetching the whole list.
+`filter_name` on `itglue_list_documents`, `itglue_list_organizations`, and `itglue_list_configurations` performs a **case-insensitive substring match**. The ITGlue API cannot filter documents by name (and its organization/configuration name filters are exact-match only), so name filtering is applied **client-side**: the tool retrieves the full list for the scope and matches locally, then paginates. ID, type, and status filters are exact and applied server-side. When you already know the exact ID, prefer `filter_id` to avoid fetching the whole list.
 
 ## Local Search Index
 
-The ITGlue API has **no full-text search** and cannot filter documents by name, which makes "find the document about X" hard across a large instance. This server adds a local, on-disk index you build explicitly and then search instantly (search never calls the API).
+The ITGlue API has **no full-text search** and cannot filter by name, which makes "find the thing about X" hard across a large instance. This server adds a local, on-disk index you build explicitly and then search instantly (search never calls the API). The index is **entity-aware**: it covers **documents** and **configurations** (pass `entity_type` when building).
 
 **Two tiers:**
 
-- **Titles** — cheap, covers **all** organizations. Build with `itglue_index_documents` (no `organization_id`).
-- **Content** — opt-in and **per organization** (costs roughly one API call per document). Build with `itglue_index_documents` using `organization_id` + `include_content: true`.
+- **Titles** — cheap, covers **all** organizations. Build with `itglue_index_documents` (no `organization_id`). Add `entity_type: "configurations"` to index configuration titles instead of documents.
+- **Content** — opt-in and **per organization**. For documents this costs roughly one API call per document; for configurations the content (notes + identifiers such as IPs and serials) comes from the record itself, so it needs no per-record fetch. Build with `itglue_index_documents` using `organization_id` + `include_content: true` (+ `entity_type` as needed).
 
 **Build vs. update:**
 
 - `mode: "full"` rebuilds the scope from scratch.
-- `mode: "incremental"` (default) re-sweeps titles cheaply, then re-fetches content only for added/changed documents and drops deleted ones — so routine refreshes are fast.
+- `mode: "incremental"` (default) re-sweeps titles cheaply, then re-fetches content only for added/changed records and drops deleted ones — so routine refreshes are fast.
 
-**Searching:** `itglue_search_documents` ranks by keyword overlap (title matches weighted above content matches). Pass `search_content: true` to also match indexed body text. Use `itglue_index_status` to see coverage and staleness.
+**Searching:** `itglue_search_documents` ranks by keyword overlap (title matches weighted above content matches) and searches **all indexed entity types by default** — pass `entity_types: ["configurations"]` to restrict. Pass `search_content: true` to also match indexed body text. Use `itglue_index_status` to see per-entity coverage and staleness.
 
-**Storage & privacy:** the cache is gzipped JSON. Document content is stored **only as a sorted, deduplicated set of keyword terms** — word order and repetition are discarded, so the cache is compact and the original text **cannot be reconstructed** from it. Typical footprint: a few MB for ~100k titles; roughly a few hundred KB per 1,000-document content shard.
+**Storage & privacy:** the cache is gzipped JSON. Content is stored **only as a sorted, deduplicated set of keyword terms** — word order and repetition are discarded, so the cache is compact and the original text **cannot be reconstructed** from it (identifiers like IPs and serials do survive as terms, which is what makes them searchable). Typical footprint: a few MB for ~100k titles; roughly a few hundred KB per 1,000-record content shard.
+
+> **Upgrading from 1.1.x:** the on-disk index schema bumped to v2. Any existing cache is treated as stale and transparently rebuilt on the next `itglue_index_documents` run — the titles re-sweep is cheap; per-organization content simply needs to be re-indexed once. The build report notes when a rebuild happened.
 
 **Cache location:** defaults to a per-OS cache directory (`%LOCALAPPDATA%\itglue-mcp-server\cache` on Windows, `~/Library/Caches/itglue-mcp-server` on macOS, `$XDG_CACHE_HOME/itglue-mcp-server` on Linux). Override with `--cache-dir <path>` or the `ITGLUE_CACHE_DIR` environment variable. The cache is namespaced by API host, so US/EU/AU instances don't collide.
 

@@ -1,6 +1,6 @@
 {
   "name": "@jasonsager/itglue-mcp-server",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Unofficial MCP server for the ITGlue API — documents, sections, organizations, plus client-side name search and a local content-search index. Fork of Junto-Platforms/itglue-mcp-server.",
   "type": "module",
   "main": "dist/index.js",
